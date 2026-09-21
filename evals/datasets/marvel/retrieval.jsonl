@@ -1,0 +1,50 @@
+{"id": "marvel-marvel#6-native", "query": "Who directed the 1978 movie Spider-Man Strikes Back and what is its runtime?", "positive_ids": ["marvel#6"], "notes": "native"}
+{"id": "marvel-marvel#6-zh", "query": "1978年的电影《蜘蛛侠反击》是由谁执导的？片长是多少？", "positive_ids": ["marvel#6"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#7-native", "query": "Who directed the 1978 Spider-Man short film and how long is it?", "positive_ids": ["marvel#7"], "notes": "native"}
+{"id": "marvel-marvel#7-zh", "query": "1978年的蜘蛛侠短片是谁执导的，时长多长？", "positive_ids": ["marvel#7"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#15-native", "query": "What is the tagline of the 1990 movie The Death of the Incredible Hulk?", "positive_ids": ["marvel#15"], "notes": "native"}
+{"id": "marvel-marvel#15-zh", "query": "1990年的电影《浩克之死》的宣传语是什么？", "positive_ids": ["marvel#15"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#1-native", "query": "Who is the archvillain in the 1944 Captain America movie serial, and what can the secret device he steals do?", "positive_ids": ["marvel#1"], "notes": "native"}
+{"id": "marvel-marvel#1-zh", "query": "1944年的美国队长电影系列片中的反派是谁？他偷走的秘密装置有什么功能？", "positive_ids": ["marvel#1"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#17-native", "query": "Who directed the 1996 film Generation X and what is its plot?", "positive_ids": ["marvel#17"], "notes": "native"}
+{"id": "marvel-marvel#17-zh", "query": "1996年电影《Generation X》的导演是谁？该片讲述了什么故事？", "positive_ids": ["marvel#17"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#24-native", "query": "Who kidnaps Professor X in X2, and why must the X-Men team up with Magneto?", "positive_ids": ["marvel#24"], "notes": "native"}
+{"id": "marvel-marvel#24-zh", "query": "在《X战警2》中，是谁绑架了X教授？X战警为什么要与万磁王联手？", "positive_ids": ["marvel#24"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#10-native", "query": "What is the plot of Captain America II: Death Too Soon?", "positive_ids": ["marvel#10"], "notes": "native"}
+{"id": "marvel-marvel#10-zh", "query": "《美国队长2：死得太快》的剧情简介是什么？", "positive_ids": ["marvel#10"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#43-native", "query": "When was the Marvel Anime: Iron Man TV series released?", "positive_ids": ["marvel#43"], "notes": "native"}
+{"id": "marvel-marvel#43-zh", "query": "动漫版《钢铁侠》电视剧是什么时候发行的？", "positive_ids": ["marvel#43"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#36-native", "query": "Who are the villains that the Fantastic Four face in the 2007 film 'Fantastic Four: Rise of the Silver Surfer'?", "positive_ids": ["marvel#36"], "notes": "native"}
+{"id": "marvel-marvel#36-zh", "query": "2007年电影《神奇四侠：银影侠降临》中，神奇四侠面对的敌人是谁？", "positive_ids": ["marvel#36"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#26-native", "query": "Who directed the 2004 film The Punisher and who are its main cast members?", "positive_ids": ["marvel#26"], "notes": "native"}
+{"id": "marvel-marvel#26-zh", "query": "谁执导了2004年的电影《惩罚者》，它的主演是谁？", "positive_ids": ["marvel#26"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#69-native", "query": "What year was Jessica Jones (Season 1) released?", "positive_ids": ["marvel#69"], "notes": "native"}
+{"id": "marvel-marvel#69-zh", "query": "《杰西卡·琼斯》第一季是在哪一年发行的？", "positive_ids": ["marvel#69"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#60-native", "query": "Who are the top 5 cast members of the 2014 film Guardians of the Galaxy, and what is its IMDb rating?", "positive_ids": ["marvel#60"], "notes": "native"}
+{"id": "marvel-marvel#60-zh", "query": "2014年电影《银河护卫队》的主要演员有哪些，其IMDb评分是多少？", "positive_ids": ["marvel#60"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#87-native", "query": "Who directed Thor: Ragnarok?", "positive_ids": ["marvel#87"], "notes": "native"}
+{"id": "marvel-marvel#87-zh", "query": "谁执导了《雷神3：诸神黄昏》？", "positive_ids": ["marvel#87"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#90-native", "query": "Which year does Agents of S.H.I.E.L.D. Season 4 belong to in the MCU classification, and is it considered part of the MCU Phase?", "positive_ids": ["marvel#90"], "notes": "native"}
+{"id": "marvel-marvel#90-zh", "query": "《神盾局特工》第四季是哪一年的，它属于MCU的哪个阶段？", "positive_ids": ["marvel#90"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#99-native", "query": "What year was Iron Fist Season 2 released and which universe does it belong to?", "positive_ids": ["marvel#99"], "notes": "native"}
+{"id": "marvel-marvel#99-zh", "query": "《铁拳》第二季是哪一年发行的，它属于哪个影视宇宙？", "positive_ids": ["marvel#99"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#103-native", "query": "Who directed the 2018 animated film Spider-Man: Into the Spider-Verse?", "positive_ids": ["marvel#103"], "notes": "native"}
+{"id": "marvel-marvel#103-zh", "query": "2018年动画电影《蜘蛛侠：平行宇宙》由哪些导演执导？", "positive_ids": ["marvel#103"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#72-native", "query": "Who directed the 2016 movie Deadpool, and what are its ratings on IMDb and Rotten Tomatoes?", "positive_ids": ["marvel#72"], "notes": "native"}
+{"id": "marvel-marvel#72-zh", "query": "谁执导了2016年的电影《死侍》，它在IMDb和烂番茄上的评分分别是多少？", "positive_ids": ["marvel#72"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#82-native", "query": "Who directed Guardians of the Galaxy Vol. 2?", "positive_ids": ["marvel#82"], "notes": "native"}
+{"id": "marvel-marvel#82-zh", "query": "《银河护卫队2》是谁执导的？", "positive_ids": ["marvel#82"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#137-native", "query": "What is the plot of Moon Girl and Devil Dinosaur?", "positive_ids": ["marvel#137"], "notes": "native"}
+{"id": "marvel-marvel#137-zh", "query": "《月女孩与恶魔恐龙》的剧情讲的是什么？", "positive_ids": ["marvel#137"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#128-native", "query": "What is the runtime and box office of the 2022 MCU film Doctor Strange in the Multiverse of Madness?", "positive_ids": ["marvel#128"], "notes": "native"}
+{"id": "marvel-marvel#128-zh", "query": "2022年MCU电影《奇异博士2：疯狂多元宇宙》的片长和票房分别是多少？", "positive_ids": ["marvel#128"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#110-native", "query": "Is Legion Season 3 part of the Marvel Cinematic Universe?", "positive_ids": ["marvel#110"], "notes": "native"}
+{"id": "marvel-marvel#110-zh", "query": "《大群》（Legion）第三季属于漫威电影宇宙（MCU）吗？", "positive_ids": ["marvel#110"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#144-native", "query": "What is the plot of the short film 'What If...?' (2023)?", "positive_ids": ["marvel#144"], "notes": "native"}
+{"id": "marvel-marvel#144-zh", "query": "2023年的短片《What If...?》的剧情是什么？", "positive_ids": ["marvel#144"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#138-native", "query": "What is the plot of the 2023 MCU series Secret Invasion?", "positive_ids": ["marvel#138"], "notes": "native"}
+{"id": "marvel-marvel#138-zh", "query": "2023年漫威电影宇宙剧集《秘密入侵》的剧情是什么？", "positive_ids": ["marvel#138"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#150-native", "query": "Who directed Captain America: Brave New World and who are the top three cast members?", "positive_ids": ["marvel#150"], "notes": "native"}
+{"id": "marvel-marvel#150-zh", "query": "《美国队长：勇敢新世界》由谁执导，前三位主演是谁？", "positive_ids": ["marvel#150"], "notes": "cross-lingual zh"}
+{"id": "marvel-marvel#147-native", "query": "Who directed the 2024 MCU movie Deadpool & Wolverine, and who are the writers?", "positive_ids": ["marvel#147"], "notes": "native"}
+{"id": "marvel-marvel#147-zh", "query": "2024年MCU电影《死侍与金刚狼》的导演是谁？编剧有哪些人？", "positive_ids": ["marvel#147"], "notes": "cross-lingual zh"}

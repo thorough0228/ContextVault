@@ -1,0 +1,15 @@
+{"id": "oob-002", "question": "根据中国《公司法》，有限责任公司股东在何种情形下需要对公司债务承担个人连带责任？", "why_out_of_kb": "知识库仅覆盖印度劳动法与公司法，不包含中国法律。"}
+{"id": "oob-001", "question": "What rubber and blade combination does Ma Long currently use in professional competition?", "why_out_of_kb": "知识库仅覆盖器材选购知识，不包含运动员个人装备选择等传记类信息"}
+{"id": "oob-003", "question": "In the original Marvel comics, what was the canonical reason Tony Stark became Iron Man, and how does it differ from the origin story told in the 2008 film?", "why_out_of_kb": "知识库仅覆盖漫威影视作品信息，不包含漫威漫画原作内容。"}
+{"id": "oob-005", "question": "What is the statutory severance pay calculation under China's Labor Contract Law for an employee terminated after 10 years of service?", "why_out_of_kb": "该问题是关于中国《劳动合同法》的辞退经济补偿问题，知识库仅覆盖印度劳动法，不含中国法律"}
+{"id": "oob-004", "question": "According to the ITTF's revised 2024 equipment regulations, has the DHS Hurricane 3 (National Tacky sponge version) been reclassified from 'inverted rubber' to 'long pimples' due to its tall pip structure, and does this reclassification affect its eligibility for the Paris 2024 Olympic table tennis events?", "why_out_of_kb": "The KB only covers table tennis equipment purchasing knowledge and explicitly excludes ITTF rule changes, regulations, and competition legality criteria, which are exactly what this question asks about."}
+{"id": "oob-007", "question": "马龙在 2021 年东京奥运会男单决赛夺冠时，使用的是哪款底板搭配什么正手胶皮？", "why_out_of_kb": "知识库仅覆盖器材选购知识，明确不包含运动员个人装备信息和具体赛事历史。"}
+{"id": "oob-009", "question": "中国《劳动合同法》中关于经济性裁员的规定，与印度《工业争议法》第25条相比，在补偿计算方式和通知程序上有哪些主要差异？", "why_out_of_kb": "问题核心要求中国劳动法知识，而知识库仅覆盖印度法律，不含中国法律"}
+{"id": "oob-006", "question": "印度新《劳动法典》关于裁员经济补偿的计算规则，与中国《劳动合同法》中的N、N+1、2N补偿机制有什么关键差异？", "why_out_of_kb": "问题表面涉及印度劳动法（在覆盖范围内），但要完整回答必须引入中国《劳动合同法》的具体条款，而知识库仅覆盖印度法律，不含中国法律，无法给出对比结论。"}
+{"id": "oob-011", "question": "马龙在2020年东京奥运会决赛中使用的正手胶皮具体是什么型号？", "why_out_of_kb": "知识库覆盖乒乓球器材的选购与原理知识，不包含特定运动员的装备使用记录（属于运动员 biography 范畴）"}
+{"id": "oob-008", "question": "樊振东目前使用哪一款 DHS 底板搭配 Tenergy 05 胶皮进行正手进攻？", "why_out_of_kb": "知识库覆盖器材规格、参数与选购知识，但不覆盖具体运动员的个人器材配置（属于运动员 biography，已明确排除）。"}
+{"id": "oob-012", "question": "在 ITTF 现行规则下，DHS Hurricane 3 和 Butterfly Tenergy 05 是否仍然获批用于 2024 年巴黎奥运会乒乓球比赛？", "why_out_of_kb": "问的是器材的 ITTF 认证状态与赛事批准信息，属于竞赛规则/规则历史范畴，KB 仅覆盖胶皮底板海绵等器材的选购与性能知识，不含规则与赛事信息。"}
+{"id": "oob-010", "question": "What rubber configuration did Ma Long use to win the men's singles final at the 2024 Paris Olympics, and what was the blade weight with sponge thickness?", "why_out_of_kb": "这是关于特定运动员在特定赛事的个人器材配置（属于运动员biography/赛事信息），知识库仅覆盖通用器材选购知识，不含任何运动员个人装备信息"}
+{"id": "oob-015", "question": "ITTF 在 2000 年将比赛用球直径从 38mm 改为 40mm 后，对底板弹力和海绵硬度的搭配策略产生了哪些具体影响？", "why_out_of_kb": "知识库覆盖乒乓球器材选购知识，但明确不含规则历史；该问题核心信息（2000年小球改大球规则变更）属于被排除的规则历史领域，答案不可能从知识库中获得。"}
+{"id": "oob-014", "question": "What specific blade and rubber combination did Ma Long use to win the men's singles gold medal at the 2024 Paris Olympics?", "why_out_of_kb": "需要具体运动员在特定赛事中的器材选择信息，属于运动员/赛事历史范畴，超出知识库仅覆盖器材选购知识的范围。"}
+{"id": "oob-013", "question": "在2023年世乒赛男单决赛中，樊振东反手使用的具体胶皮型号是什么？", "why_out_of_kb": "该问题询问特定赛事中特定运动员的具体器材选择，属于赛事历史和运动员传记范畴，不在知识库覆盖的器材选购知识范围内。"}

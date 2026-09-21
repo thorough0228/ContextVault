@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contextvault-evals"
+version = "0.1.0"
+requires-python = ">=3.11"
+# The harness deliberately keeps its heavy dependency (deepeval) OUT of
+# the project dependencies: the offline suites must run in a bare
+# environment. Install manually for the online generation suite:
+#   pip install "deepeval>=3.0"
+dependencies = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["evals/suites"]
+addopts = "-q --tb=short"
+asyncio_mode = "auto"
+pythonpath = [".", "../apps/api"]
+markers = [
+    "offline: deterministic offline eval suites (no network, CI-safe)",
+    "online: eval suites that call the real LLM API (MiniMax, costs tokens)",
+    "live: eval suites against the running docker stack (postgres + pgvector path)",
+]

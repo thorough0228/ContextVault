@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contextvault-tests"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+# no:deepeval — importing deepeval (installed in the agents env) autoloads
+# the repo-root .env into os.environ at plugin load, which would leak
+# EMBEDDING_*/LLM_* into the per-app subprocesses and defeat their
+# offline test defaults.
+addopts = "-q --tb=short -p no:cacheprovider -p no:deepeval"
+pythonpath = ["."]
+asyncio_mode = "auto"

@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.npm/
+.turbo/
+.pnpm-store/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+.env.local
+
+# Logs / runtime
+logs/
+*.log
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Test / coverage
+.coverage
+coverage/
+htmlcov/
+.pytest_cache/
+
+# Data / uploads
+data/
+uploads/
+# ---- 用户指定不上传（2026-09-20） ----
+dataset_rag/
+docs/
+AGENTS.md
+CONTRIBUTING.md
+ContextVault_简历.md
+RAG文档更新后的解决方法.txt
+
+# ---- 大模型权重（GitHub 单文件 100MB 硬限制） ----
+models/
+
+# ---- 评测运行产物 ----
+evals/results/
+.deepeval/
+.zcode/
