@@ -5,7 +5,8 @@
 ### 多租户 RAG-as-a-Service 平台
 
 严格的 `User → RAG → Document → Chunk` 归属链、pgvector 向量检索、
-流式 LLM 对话 + 来源引用。Phase 6 工程化加固,可上生产。
+混合检索(向量+BM25+rerank)、MinerU 文档解析、流式对话 + 来源引用、
+对话记忆与文档灰度更新。15 个 Phase 迭代,生产可用。
 
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)]()
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)]()
@@ -42,8 +43,8 @@
 - **Belt-and-suspenders 的可观测性。** `X-Request-Id` 从 API 流向
   Celery task、再到 worker 日志。`LOG_FORMAT=json` 一键切换全链路到
   结构化输出。
-- **13 个 Phase、238 个测试、0 失败。** 单测、集成、E2E happy path +
-  跨租户共存测试 —— 每一处改动都有测试。
+- **15 个 Phase、339 个测试、0 失败。** 单测、集成、E2E happy path、
+  跨租户共存、ACL 泄露矩阵、检索质量基线 —— 每一处改动都有测试与回归。
 
 ---
 
@@ -195,6 +196,12 @@ Golden 评测(230 查询):hybrid hit@5=0.965 vs vector 0.896 vs
 升级前 0.287。配置:`SEARCH_MODE` / `SEARCH_HYBRID_RRF_K` /
 `SEARCH_RERANK_ENABLED` / `SEARCH_BM25_ENABLED`。
 
+**切块策略可配**(`CHUNKER_TYPE`,Phase 14):`fixed`(500/100 滑窗,原行为)/
+`recursive`(段落→句边界递归切分)/`semantic`(embedding 断点检测,API 失败
+自动降级 recursive)。Golden 矩阵实测:rerank 精排使切块策略对 overall
+敏感度大幅下降(hybrid 下 fixed 0.939 vs recursive 0.883),生产定稿
+**fixed 切块 + hybrid 检索**;扫描件/复杂版面 PDF 建议走 MinerU 预处理(见 5d)。
+
 ### 5c. 文档更新(hash 感知 + 灰度双版本,Phase 13)
 
 - 上传即记录 `content_hash`(SHA-256);同 RAG 同名重复上传返回 **409**
@@ -203,6 +210,20 @@ Golden 评测(230 查询):hybrid hit@5=0.965 vs vector 0.896 vs
   `bluegreen` → 新文档独立入库,READY 后自动隐藏旧版(检索不可见),
   `POST /documents/{new_id}/rollback` 可回滚
 - 检索全路径自动过滤被取代文档;前端 Documents 面板提供 Update 入口
+
+### 5d. 文档解析引擎(MinerU 优先,Phase 15)
+
+`PDF_PARSER=auto` 时 PDF 解析按优先级降级链执行:
+
+1. **MinerU**(外部 CLI 子进程,4.x:`mineru parse --tier flash`):布局/表格/OCR
+   质量最高;产出的 markdown 经内置清洗(HTML 表格 → MD 管道表、剥图片引用、
+   保留 LaTeX 公式),按 H1/H2 标题切虚拟页
+2. **Unstructured**(`partition_pdf`,可选依赖)
+3. **PyMuPDF**(文本层,兜底/默认)
+
+任一引擎失败自动降级到下一级,文档永不因解析引擎失败而卡死。
+配套脚本 `scripts/mineru_to_markdown.py`:把 MinerU 输出目录清洗为纯
+markdown 后直接上传(.md 为受支持类型)。
 
 ### 6. 三层安全边界
 
@@ -421,7 +442,7 @@ cd apps/web
 npm run build                             # 前端 production build
 ```
 
-完整 238 个测试应该全绿。详见「[测试与质量](#测试与质量)」。
+完整 339 个测试应该全绿。详见「[测试与质量](#测试与质量)」。
 
 ---
 
@@ -480,11 +501,12 @@ contextvault/
 
 | 套件 | 数量 | 命令 |
 |---|---|---|
-| API(单测 + 集成 + E2E) | 222 | `cd apps/api && pytest` |
+| API(单测 + 集成 + E2E + 解析/记忆/更新) | 257 | `cd apps/api && pytest` |
 | Worker | 7 | `cd apps/worker && pytest` |
+| evals(检索/生成/健壮性/ACL 离线部分) | 66 | `cd evals && pytest evals/suites -m offline` |
 | 跨应用 smoke + evals 离线编排 | 9 | `pytest tests/` 在 repo 根 |
 | 前端 build | - | `cd apps/web && npm run build` |
-| **合计** | **238** | **0 失败**(2026-09-21 实跑) |
+| **合计** | **339**(在线评测按需另跑) | **0 失败**(2026-09-24 实跑) |
 
 ### E2E 覆盖
 
