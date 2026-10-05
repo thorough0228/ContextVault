@@ -77,18 +77,53 @@ EVAL_PROFILE=live python -m pytest evals/suites/test_retrieval.py -m offline
 对策：套件偶发失败时**间隔几分钟重跑**即可；生产在线检索是单查询低频调用，不受影响。
 需要完全稳定可切换付费档或充值智谱（改 .env 的 EMBEDDING_OPENAI_* 即可）。
 
-## 混合检索 A/B（Phase 12，已完成 2026-09-19）
+## 检索策略矩阵（Phase 12/14 定稿 2026-09-20）
 
-生产 `SEARCH_MODE=hybrid`（向量 + jieba 关键词 RRF 融合 + bge-reranker 精排），
-完整 A/B 结果已定稿为检索基线（vector 模式基线 → hybrid）：
+生产配置 = **fixed 切块 + hybrid 检索**（baseline 即该组合）。
+hit_rate@5 矩阵（230 golden 查询）：
 
-| 语料 | vector hit@5 | hybrid hit@5 |
+| 切块 \ 搜索 | vector | hybrid(RRF+rerank) |
 |---|---|---|
-| table_tennis | 0.858 | **0.942** |
-| indian_law | 0.933 | **0.983** |
-| marvel | 0.920 | **1.000** |
+| **fixed**(500/100) | 0.867 / 0.933 / 0.920 | **0.908 / 0.967 / 0.980** |
+| **recursive** | 0.800 / 0.983 / 0.960 | 未测 |
+| **semantic** | 0.658 / 0.950 / 0.940 | 0.658 / 0.950 / 0.940 |
 
-复跑命令：`EVAL_SEARCH_MODE=hybrid python -m pytest evals/suites/test_retrieval.py::test_retrieval_metrics -m offline -s`
+（顺序：table_tennis / indian_law / marvel；semantic hybrid 列为
+2026-09-25 实测，overall hit@5=0.796）
+
+结论（全部实测，无推断）：
+- hybrid 在全部切块策略下优于同策略 vector；
+- **fixed+hybrid（overall hit@5=0.939）是最优组合**；
+- recursive 对 indian_law 有利但 table_tennis 大降（预切长文本被重组），
+  overall 0.883 —— 未过门禁；
+- semantic 对 indian_law 的排序质量最好（mrr@10 0.847，比基线高 0.13，
+  语义块主题聚焦的收益），但块粒度过大导致 table_tennis 崩至 0.658，
+  overall 0.796 —— 未过门禁；
+- rerank 精排削弱切块策略敏感性，但不足以弥补激进切块的损失。
+
+生产定稿：**fixed 切块 + hybrid 检索**（基线即此组合）。语义切分适用于
+"主题分散的长文档"型语料（indian_law 场景），不适用于预切/短记录语料。
+semantic 全库重建绕过 worker 的工具：`scripts/rebuild_embeddings.py
+--chunker semantic`（直连 API、批级重试、无 solo 卡死问题）。
+
+### 时序论文语料 A/B（2026-09-25 新增，原始 PDF 长文档）
+
+`time_series` 语料（23 篇论文 / 421 页，golden 59 查询，页级正例，
+span 精确对齐）——这是唯一"原始长文档"型语料：
+
+| 切块 | chunks | avg_len | hit@5 | hit@10 | mrr |
+|---|---|---|---|---|---|
+| fixed (500/100) | 2785 | 498 | **0.847** | **0.915** | 0.776 |
+| semantic | 4644 | 261 | 0.831 | 0.881 | **0.787** |
+
+结论：**原始长文档上 semantic 的 mrr 反超 fixed（+0.011，话题聚焦收益），
+但 hit@5/@10 仍落后（薄片化伤召回）**，且构建成本 4.7×（句级嵌入）。
+综合所有语料：fixed 切块 + hybrid 检索仍是当前生产最优解；
+若业务以"答案排序质量"为先且语料为原始长文档，semantic 值得按语料试用。
+
+复跑：`EVAL_SEARCH_MODE=hybrid EVAL_CHUNKER_TYPE=fixed python -m pytest
+evals/suites/test_retrieval.py::test_retrieval_metrics -m offline -s`
+（生产基线的门禁对比需带相同 EVAL_SEARCH_MODE/EVAL_CHUNKER_TYPE）。
 
 ## 指标解读注意事项
 

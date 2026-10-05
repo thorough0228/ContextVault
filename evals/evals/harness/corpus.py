@@ -91,11 +91,42 @@ def _load_injection() -> List[dict]:
     return out
 
 
+def _load_time_series_papers() -> List[dict]:
+    """Time-series research papers (dataset_rag/时序论文/*.pdf).
+
+    Each record = one PAGE of one paper (id = ``<paper>#p<page>``) —
+    page-grain keeps golden alignment unambiguous. Extracted via
+    PyMuPDF text layer; empty pages skipped. Ordered by paper then
+    page so record ids are stable across runs.
+    """
+
+    import fitz
+
+    directory = REPO_DATASETS / "时序论文"
+    out: List[dict] = []
+    for pdf_path in sorted(directory.glob("*.pdf")):
+        stem = pdf_path.stem
+        try:
+            doc = fitz.open(pdf_path)
+        except Exception:  # noqa: BLE001 — corrupt PDF: skip the paper
+            continue
+        try:
+            for i, page in enumerate(doc, start=1):
+                text = (page.get_text("text") or "").strip()
+                if len(text) < 80:  # cover images / references-only pages
+                    continue
+                out.append({"id": f"{stem}#p{i}", "text": text})
+        finally:
+            doc.close()
+    return out
+
+
 CORPUS_SOURCES: Dict[str, Callable[[], List[dict]]] = {
     "table_tennis": _load_table_tennis,
     "indian_law": _load_indian_law,
     "marvel": _load_marvel,
     "injection": _load_injection,
+    "time_series": _load_time_series_papers,
 }
 
 

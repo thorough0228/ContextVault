@@ -38,22 +38,26 @@ class EvalSettings:
     # sqlite (offline, default) | live (running docker stack + pgvector)
     profile: str = os.environ.get("EVAL_PROFILE", "sqlite")
 
-    # Local embedding model used by the sqlite profile's ingestion and
-    # search. Must match EMBEDDING_MODEL/EMBEDDING_DIMENSION in .env
-    # when comparing against live runs. bge-m3 uses no query prefix;
-    # bge-small-zh wants the Chinese retrieval instruction instead.
+    # Local embedding model used by the sqlite profile when a suite
+    # pins embedding="local" (deterministic self-checks; the production
+    # profile uses the SiliconFlow API instead). Points at the small
+    # CPU model — bge-m3's local copy was removed (the API replaced it,
+    # and fp32 loading segfaulted on 4GB GPUs anyway).
     embedding_model_path: Path = field(
         default_factory=lambda: Path(
             os.environ.get(
                 "EVAL_EMBEDDING_MODEL",
-                str(REPO_ROOT / "models" / "bge-m3"),
+                str(REPO_ROOT / "models" / "bge-small-zh-v1.5"),
             )
         )
     )
     embedding_dimension: int = int(
-        os.environ.get("EVAL_EMBEDDING_DIMENSION", "1024")
+        os.environ.get("EVAL_EMBEDDING_DIMENSION", "512")
     )
-    query_instruction: str = os.environ.get("EVAL_QUERY_INSTRUCTION", "")
+    query_instruction: str = os.environ.get(
+        "EVAL_QUERY_INSTRUCTION",
+        "为这个句子生成表示以用于检索相关文章：",
+    )
 
     # Retrieval metric cut-offs. One search call per query at
     # ``retrieval_top_k`` serves the whole grid. Keep top_k high
@@ -82,6 +86,9 @@ class EvalSettings:
     # produce disjoint subsets (same seed does NOT nest).
     # Search mode for production-embedding runs: "vector" or "hybrid".
     search_mode: str = os.environ.get("EVAL_SEARCH_MODE", "vector")
+    # Chunker used by the production ingest pipeline under evaluation:
+    # "fixed" | "recursive" | "semantic".
+    chunker_type: str = os.environ.get("EVAL_CHUNKER_TYPE", "fixed")
 
     corpus_size: int = int(os.environ.get("EVAL_CORPUS_SIZE", "300"))
     live_corpus_size: int = int(os.environ.get("EVAL_LIVE_CORPUS_SIZE", "300"))

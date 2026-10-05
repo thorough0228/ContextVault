@@ -64,6 +64,7 @@ def _make_env(corpora: list[str]):
         seed=settings.seed,
         chunk_guard=settings.sqlite_chunk_guard,
         search_mode=settings.search_mode,
+        chunker_type=settings.chunker_type,
     )
 
 

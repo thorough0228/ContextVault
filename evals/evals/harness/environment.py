@@ -257,6 +257,7 @@ class SqliteEvalEnv:
         memory_extraction: bool = False,
         memory_injection: bool = False,
         document_update_strategy: str = "replace",
+        chunker_type: str = "fixed",
         ingest_timeout_s: float = 120.0,
         tmp_root: Optional[Path] = None,
     ) -> None:
@@ -268,6 +269,7 @@ class SqliteEvalEnv:
         self._memory_extraction = memory_extraction
         self._memory_injection = memory_injection
         self._document_update_strategy = document_update_strategy
+        self._chunker_type = chunker_type
         self._corpus_size = corpus_size if corpus_size is not None else _s.corpus_size
         self._seed = seed if seed is not None else _s.seed
         self._chunk_size = chunk_size if chunk_size is not None else _s.chunk_size
@@ -338,6 +340,7 @@ class SqliteEvalEnv:
                     "1" if self._memory_injection else "0"
                 ),
                 DOCUMENT_UPDATE_STRATEGY=self._document_update_strategy,
+                CHUNKER_TYPE=self._chunker_type,
             )
         elif self._embedding == "local":
             env.update(
@@ -347,6 +350,7 @@ class SqliteEvalEnv:
                 EMBEDDING_LOCAL_QUERY_INSTRUCTION=self._query_instruction,
                 EMBEDDING_LOCAL_FP16="1",
                 EMBEDDING_BATCH_SIZE="8",
+                CHUNKER_TYPE=self._chunker_type,
                 SEARCH_MODE=self._search_mode,
                 DOCUMENT_UPDATE_STRATEGY=self._document_update_strategy,
             )
@@ -357,6 +361,7 @@ class SqliteEvalEnv:
                 MEMORY_EXTRACTION_ENABLED="0",
                 MEMORY_INJECTION_ENABLED="0",
                 DOCUMENT_UPDATE_STRATEGY="replace",
+                CHUNKER_TYPE=self._chunker_type,
                 EMBEDDING_MODEL="hash-eval",
                 EMBEDDING_DIMENSION="32",
             )
