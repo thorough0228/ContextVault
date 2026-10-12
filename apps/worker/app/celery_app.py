@@ -24,6 +24,7 @@ import os
 import sys
 
 from celery import Celery  # noqa: E402
+from celery.schedules import crontab as _crontab  # noqa: E402
 
 from app.config import get_settings  # noqa: E402  (the API's superset config)
 from app.request_id import RequestIdFilter  # noqa: E402
@@ -67,6 +68,19 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_default_queue="default",
     broker_connection_retry_on_startup=True,
+    # Phase 17 wiki auto-maintenance. Runs only when a beat process is
+    # up (`celery -A app.celery_app beat`); the tasks themselves are
+    # safe no-ops when there is nothing to do.
+    beat_schedule={
+        "wiki-maintenance-every-30min": {
+            "task": "app.tasks.wiki_maintenance",
+            "schedule": _crontab(minute="*/30"),
+        },
+        "wiki-contradiction-scan-daily": {
+            "task": "app.tasks.wiki_contradiction_scan",
+            "schedule": _crontab(hour=4, minute=0),
+        },
+    },
     # Windows + billiard prefork crashes every task with
     # "not enough values to unpack (expected 3, got 0)" — force the
     # single-process solo pool there. Linux/Docker keep prefork.

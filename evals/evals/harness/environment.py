@@ -47,6 +47,7 @@ _MANAGED_ENV_KEYS = (
     "MEMORY_EXTRACTION_ENABLED", "MEMORY_INJECTION_ENABLED",
     "LLM_PROVIDER", "LLM_MODEL",
     "WIKI_ROUTE_ENABLED", "WIKI_ROUTE_MIN_SCORE",
+    "WIKI_CACHE_ENABLED",
     "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND",
 )
 
@@ -307,6 +308,37 @@ class SqliteEvalEnv:
     async def __aenter__(self) -> "SqliteEvalEnv":
         self._tmpdir = tempfile.mkdtemp(prefix="cv-eval-")
         tmp = Path(self._tmpdir)
+
+        # Build corpora and enforce the chunk guard BEFORE any managed
+        # env var is applied. The guard raises AssertionError by design;
+        # if that happened after os.environ.update() below, `async with`
+        # would never call __aexit__ and the hash/test env vars would
+        # leak into every later test in the process (this exact order-
+        # dependent leak poisoned the full-suite retrieval gate: the
+        # guard smoke test ran before it and left EMBEDDING_PROVIDER=hash
+        # behind). Pure computation — nothing here reads the env.
+        for name in self._corpora_names:
+            spec = build_corpus(
+                name,
+                size=self._corpus_size,
+                seed=self._seed,
+                out_dir=tmp / "corpora",
+                chunk_size=self._chunk_size,
+                chunk_overlap=self._chunk_overlap,
+            )
+            if spec.meta["estimated_chunks"] > self._chunk_guard:
+                shutil.rmtree(self._tmpdir, ignore_errors=True)
+                self._tmpdir = None
+                raise AssertionError(
+                    f"corpus {name!r} would produce ~{spec.meta['estimated_chunks']} "
+                    "vector chunks — above the sqlite guard "
+                    f"{self._chunk_guard}. The SQLite search path caps "
+                    "candidates at top_k*50, so lower EVAL_CORPUS_SIZE or "
+                    "run the live profile."
+                )
+            self.corpora[name] = spec
+            self.meta.corpora[name] = dict(spec.meta)
+
         self._saved_env = {k: os.environ.get(k) for k in _MANAGED_ENV_KEYS}
 
         db_path = tmp / "eval.sqlite"
@@ -323,6 +355,9 @@ class SqliteEvalEnv:
             "CHUNK_OVERLAP_CHARS": str(self._chunk_overlap),
             "CELERY_BROKER_URL": "memory://",
             "CELERY_RESULT_BACKEND": "cache+memory://",
+            # the eval app must never reach for a real Redis for the
+            # Phase 17 wiki cache — a developer .env flip cannot leak in
+            "WIKI_CACHE_ENABLED": "0",
         }
         if self._embedding == "production":
             # Inherit the API's own embedding provider from .env (the
@@ -453,22 +488,10 @@ class SqliteEvalEnv:
                 shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     async def _ingest_corpora(self, tmp: Path) -> None:
+        # Specs were pre-built + guard-checked in __aenter__ (before the
+        # managed env was applied) — this only uploads them.
         for name in self._corpora_names:
-            spec = build_corpus(
-                name,
-                size=self._corpus_size,
-                seed=self._seed,
-                out_dir=tmp / "corpora",
-                chunk_size=self._chunk_size,
-                chunk_overlap=self._chunk_overlap,
-            )
-            if spec.meta["estimated_chunks"] > self._chunk_guard:
-                raise AssertionError(
-                    f"corpus {name!r} would produce ~{spec.meta['estimated_chunks']} "
-                    f"vector chunks — above the sqlite guard {self._chunk_guard}. "
-                    "The SQLite search path caps candidates at top_k*50, so lower "
-                    "EVAL_CORPUS_SIZE or run the live profile."
-                )
+            spec = self.corpora[name]
             resp = await self.client.post(
                 "/api/v1/rags",
                 headers=self.auth_headers,
@@ -487,8 +510,6 @@ class SqliteEvalEnv:
                 timeout_s=self._ingest_timeout_s,
             )
             self.rag_ids[name] = rag_id
-            self.corpora[name] = spec
-            self.meta.corpora[name] = dict(spec.meta)
 
 
 class _CeleryState:

@@ -206,11 +206,22 @@ async def delete_user_document(
     """
     doc = await get_user_document(db, user_id=user_id, document_id=document_id)
     storage_key = doc.storage_key
+    rag_id = doc.rag_id
 
     await db.execute(delete(Chunk).where(Chunk.document_id == document_id))
     invalidate_bm25_for_rag(doc.rag_id)
     await db.delete(doc)
     await db.flush()
+
+    # Phase 17: the wiki layer has no FK on source_refs — prune the
+    # deleted document from derived pages NOW (a dangling page would
+    # stay routable and cite a ghost document); rebuilds the index and
+    # evicts the rag's hot cache.
+    from app.services import wiki_service
+
+    await wiki_service.prune_pages_for_document(
+        db, rag_id=rag_id, document_id=document_id
+    )
 
     try:
         storage = get_storage()

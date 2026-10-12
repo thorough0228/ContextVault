@@ -211,8 +211,6 @@ async def rebuild_index_page(db: AsyncSession, *, rag_id: str) -> Optional[WikiP
         lines.append("")
 
     content = "\n".join(lines).strip() + "\n" if len(lines) > 2 else ""
-    if not content:
-        return None
 
     page = await db.scalars(
         select(WikiPage).where(
@@ -220,6 +218,16 @@ async def rebuild_index_page(db: AsyncSession, *, rag_id: str) -> Optional[WikiP
         )
     )
     existing = page.first()
+
+    # No summaries left (all deleted/pruned) → the index page must go
+    # too; an empty index listing ghosts would keep surfacing in chat.
+    if not content:
+        if existing is not None:
+            await db.delete(existing)
+            await db.flush()
+            logger.info("wiki.index.removed rag_id=%s (no summaries)", rag_id)
+        return None
+
     if existing is not None:
         existing.content = content
         page_obj = existing
@@ -265,6 +273,9 @@ async def mark_stale_for_document(db: AsyncSession, *, document_id: str) -> int:
             marked += 1
     if marked:
         await db.flush()
+        from app.services import wiki_cache
+
+        await wiki_cache.invalidate(doc.rag_id)
         logger.info(
             "wiki.stale.marked document_id=%s pages=%d", document_id, marked
         )
@@ -275,33 +286,32 @@ async def wiki_context_for_query(
     db: AsyncSession, *, rag_id: str, query: str, top_k: int = 3
 ) -> List[dict]:
     """Wiki-first retrieval: BM25-ish lexical scoring of wiki pages
-    against the query. Non-stale pages only. Returns a list of
-    ``{"slug", "title", "content", "score"}`` dicts (may be empty)."""
+    against the query. Non-stale pages only (served through the Phase
+    17 hot cache when enabled). Returns a list of
+    ``{"slug", "title", "content", "source_refs", "notes", "score"}``
+    dicts (may be empty)."""
 
     from app.services.tokenization import tokenize
+    from app.services import wiki_cache
 
     q_tokens = set(tokenize(query))
     if not q_tokens:
         return []
-    rows = await db.scalars(
-        select(WikiPage).where(
-            WikiPage.rag_id == rag_id,
-            WikiPage.stale.is_(False),
-        )
-    )
+    pages = await wiki_cache.load_pages(db, rag_id=rag_id)
     scored: List[dict] = []
-    for page in rows.all():
-        doc_tokens = set(tokenize(page.title + "\n" + page.content))
+    for page in pages:
+        doc_tokens = set(tokenize(page["title"] + "\n" + page["content"]))
         overlap = len(q_tokens & doc_tokens)
         if overlap == 0:
             continue
         scored.append(
             {
-                "slug": page.slug,
-                "title": page.title,
-                "content": page.content,
+                "slug": page["slug"],
+                "title": page["title"],
+                "content": page["content"],
+                "source_refs": page.get("source_refs") or [],
+                "notes": page.get("notes"),
                 "score": overlap / len(q_tokens),
-                "source_refs": page.source_refs or [],
             }
         )
     scored.sort(key=lambda h: h["score"], reverse=True)
@@ -336,6 +346,265 @@ def wiki_citations_from_pages(pages: List[dict]) -> List[dict]:
                 }
             )
     return out
+
+
+async def prune_pages_for_document(
+    db: AsyncSession, *, rag_id: str, document_id: str
+) -> dict:
+    """Immediate wiki consistency after a document DELETE (Phase 17).
+
+    The ``source_refs`` provenance is a JSON column with no FK, so a
+    deleted document would otherwise leave a routable page citing a
+    ghost document_id. Prunes the ref from every doc_summary page;
+    pages left without refs are deleted; the index page is rebuilt and
+    the hot cache evicted. Returns cleanup counts.
+    """
+
+    rows = await db.scalars(
+        select(WikiPage).where(
+            WikiPage.rag_id == rag_id,
+            WikiPage.kind == KIND_DOC_SUMMARY,
+        )
+    )
+    pruned = deleted = 0
+    touched = False
+    for page in rows.all():
+        refs = page.source_refs or []
+        live = [r for r in refs if r.get("document_id") != document_id]
+        if len(live) == len(refs):
+            continue
+        if live:
+            page.source_refs = live
+            pruned += 1
+            touched = True
+        else:
+            await db.delete(page)
+            deleted += 1
+            touched = True
+    if touched:
+        await rebuild_index_page(db, rag_id=rag_id)
+        await db.flush()
+        from app.services import wiki_cache
+
+        await wiki_cache.invalidate(rag_id)
+        logger.info(
+            "wiki.prune.ok rag_id=%s document_id=%s pruned=%d deleted=%d",
+            rag_id, document_id, pruned, deleted,
+        )
+    return {"pruned": pruned, "deleted": deleted}
+
+
+async def rescan_wiki_pages(db: AsyncSession, *, enqueue) -> dict:
+    """Maintenance pass 1 (Phase 17): find READY documents whose wiki
+    page is missing, stale, or built against a diverged content hash
+    (a rename leaves hash-diverged pages that the update-path stale
+    marker misses), mark them stale, and re-enqueue generation.
+
+    ``enqueue`` is ``_enqueue_wiki_generation``-shaped (injected so
+    tests can spy on it). Pure DB — safe on every beat tick.
+    """
+
+    from app.models import Chunk
+
+    docs = (
+        (await db.scalars(select(Document).where(Document.status == "READY")))
+        .all()
+    )
+    docs_by_id = {d.id: d for d in docs}
+    pages = (
+        await db.scalars(
+            select(WikiPage).where(WikiPage.kind == KIND_DOC_SUMMARY)
+        )
+    ).all()
+
+    marked = 0
+    enqueued_ids: List[str] = []
+    for page in pages:
+        diverged = False
+        for ref in page.source_refs or []:
+            doc = docs_by_id.get(ref.get("document_id"))
+            if doc is not None and ref.get("content_hash") != doc.content_hash:
+                diverged = True
+        if diverged and not page.stale:
+            page.stale = True
+            marked += 1
+            for ref in page.source_refs or []:
+                if ref.get("document_id") in docs_by_id:
+                    enqueued_ids.append(ref["document_id"])
+
+    existing_slugs = {(p.rag_id, p.slug) for p in pages}
+    for doc in docs:
+        slug = _summary_slug(doc.filename)
+        if (doc.rag_id, slug) in existing_slugs:
+            continue
+        # a page-less doc with no chunk body would skip regeneration
+        # forever (empty_body) — don't re-enqueue it every tick
+        has_body = await db.scalar(
+            select(Chunk.id).where(Chunk.document_id == doc.id).limit(1)
+        )
+        if has_body:
+            enqueued_ids.append(doc.id)
+
+    enqueued = 0
+    for document_id in dict.fromkeys(enqueued_ids):  # dedupe, keep order
+        enqueue(document_id=document_id)
+        enqueued += 1
+    await db.commit()
+    if marked or enqueued:
+        logger.info("wiki.rescan.ok marked=%d enqueued=%d", marked, enqueued)
+    return {"marked": marked, "enqueued": enqueued}
+
+
+async def lint_orphan_pages(db: AsyncSession) -> dict:
+    """Maintenance pass 2 (Phase 17): drop wiki pages whose provenance
+    is gone — every source_refs entry points at a deleted document, or
+    the slug no longer matches any live document filename (rename
+    leftovers). Prunes partially-dead refs, rebuilds the affected
+    RAGs' index pages, evicts their caches. Pure DB."""
+
+    docs = (await db.scalars(select(Document))).all()
+    docs_by_id = {d.id: d for d in docs}
+    rag_slugs: dict = {}
+    for d in docs:
+        rag_slugs.setdefault(d.rag_id, set()).add(_summary_slug(d.filename))
+
+    pages = (
+        await db.scalars(
+            select(WikiPage).where(WikiPage.kind == KIND_DOC_SUMMARY)
+        )
+    ).all()
+
+    deleted = pruned = 0
+    touched_rags: List[str] = []
+    for page in pages:
+        refs = page.source_refs or []
+        live_refs = [r for r in refs if r.get("document_id") in docs_by_id]
+        slug_live = page.slug in rag_slugs.get(page.rag_id, set())
+        if not live_refs or not slug_live:
+            await db.delete(page)
+            deleted += 1
+            touched_rags.append(page.rag_id)
+            continue
+        if len(live_refs) != len(refs):
+            page.source_refs = live_refs
+            pruned += 1
+            touched_rags.append(page.rag_id)
+
+    for rag_id in dict.fromkeys(touched_rags):
+        await rebuild_index_page(db, rag_id=rag_id)
+    await db.commit()
+    if touched_rags:
+        from app.services import wiki_cache
+
+        for rag_id in dict.fromkeys(touched_rags):
+            await wiki_cache.invalidate(rag_id)
+        logger.info(
+            "wiki.lint.ok deleted=%d pruned=%d rags=%d",
+            deleted, pruned, len(set(touched_rags)),
+        )
+    return {"deleted": deleted, "pruned": pruned}
+
+
+_CONTRADICTION_PROMPT = """You audit the wiki of a knowledge base. Below are
+its distilled pages. Identify pairs of pages that CONTRADICT each other —
+conflicting facts, numbers, dates, or claims about the same subject.
+
+Answer with ONLY a JSON array (possibly empty):
+[{{"slug_a": "...", "slug_b": "...", "summary": "one-line description"}}]
+
+Pages:
+{pages}
+"""
+
+
+def _parse_contradiction_array(raw: str) -> Optional[List[dict]]:
+    """Best-effort strict-JSON object-array extraction (same posture as
+    the memory fact parser: fence strip, bracket slice, strict loads).
+    Returns ``None`` when the answer isn't a JSON array at all (parse
+    failure — distinct from a genuine empty ``[]``)."""
+
+    import json as _json
+    import re as _re
+
+    text = (raw or "").strip()
+    fence = _re.search(r"```(?:json)?\s*(.+?)```", text, _re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+    start, end = text.find("["), text.rfind("]")
+    if start < 0 or end <= start:
+        return None
+    try:
+        data = _json.loads(text[start : end + 1])
+    except _json.JSONDecodeError:
+        return None
+    if not isinstance(data, list):
+        return None
+    return [item for item in data if isinstance(item, dict)]
+
+
+async def detect_contradictions(
+    db: AsyncSession, *, rag_id: str, llm: LLMProvider
+) -> List[dict]:
+    """Maintenance pass 3 (Phase 17, LLM): compare a RAG's doc_summary
+    pages and record contradictions in each involved page's ``notes``
+    column ({"contradictions": [...]}); pages with no findings get
+    their notes cleared. An unparseable LLM answer leaves notes
+    untouched (degradation — never wipe findings on a bad answer)."""
+
+    pages = (
+        await db.scalars(
+            select(WikiPage).where(
+                WikiPage.rag_id == rag_id,
+                WikiPage.kind == KIND_DOC_SUMMARY,
+                WikiPage.stale.is_(False),
+            )
+        )
+    ).all()
+    if len(pages) < 2:
+        return []
+
+    body = "\n\n".join(f"### {p.slug}\n{p.content[:1500]}" for p in pages)
+    try:
+        raw = await llm.chat(
+            [{"role": "user", "content": _CONTRADICTION_PROMPT.format(pages=body)}]
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "wiki.contradictions.failed rag_id=%s err=%s",
+            rag_id, str(exc)[:160],
+        )
+        return []
+    findings = _parse_contradiction_array(raw)
+    if findings is None:
+        logger.warning(
+            "wiki.contradictions.parse_failed rag_id=%s — notes untouched",
+            rag_id,
+        )
+        return []
+
+    findings = [
+        f for f in findings
+        if f.get("slug_a") and f.get("slug_b") and f.get("summary")
+    ]
+    by_slug = {p.slug: p for p in pages}
+    involved: dict = {}
+    for f in findings:
+        for slug in (f["slug_a"], f["slug_b"]):
+            if slug in by_slug:
+                involved.setdefault(slug, []).append(f)
+    for page in pages:
+        page.notes = (
+            {"contradictions": involved[page.slug]}
+            if page.slug in involved
+            else None
+        )
+    await db.commit()
+    if findings:
+        logger.info(
+            "wiki.contradictions.ok rag_id=%s findings=%d pages=%d",
+            rag_id, len(findings), len(involved),
+        )
+    return findings
 
 
 

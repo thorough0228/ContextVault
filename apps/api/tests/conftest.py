@@ -50,6 +50,9 @@ os.environ.setdefault("WIKI_LLM_MODEL", "")
 # test assumes the legacy (route-off) chat behaviour regardless of the
 # developer's .env.
 os.environ.setdefault("WIKI_ROUTE_ENABLED", "false")
+# Phase 17: the wiki hot cache must never reach for a real Redis from
+# inside tests — cache tests opt in with a stub backend.
+os.environ.setdefault("WIKI_CACHE_ENABLED", "0")
 
 import httpx
 import pytest

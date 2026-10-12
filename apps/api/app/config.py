@@ -221,6 +221,13 @@ class Settings(BaseSettings):
     # block (Phase 15 behaviour).
     wiki_route_enabled: bool = False
     wiki_route_min_score: float = 0.3
+    # Wiki hot cache (Phase 17): non-stale wiki pages per RAG cached in
+    # Redis (db 0) with a TTL safety net plus explicit invalidation on
+    # every write path. Disabled by default — when Redis is unreachable
+    # the cache degrades to the plain DB query with a warning, chat is
+    # never blocked on it.
+    wiki_cache_enabled: bool = False
+    wiki_cache_ttl_seconds: int = 300
 
     # ---- LLM (Phase 5) ----
     # All values come from .env / environment. The default provider
@@ -337,6 +344,17 @@ class Settings(BaseSettings):
             f"postgresql+psycopg2://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
+
+    @property
+    def redis_url(self) -> str:
+        """Redis URL for the api process's own cache connections.
+
+        Deliberately NOT the celery broker/backend URLs: the cache uses
+        db 0 while broker (1) and result backend (2) belong to celery,
+        so flushing/misbehaving cache code can never touch celery state.
+        """
+        auth = f":{self.redis_password}@" if self.redis_password else ""
+        return f"redis://{auth}{self.redis_host}:{self.redis_port}/{self.redis_db}"
 
     @property
     def is_development(self) -> bool:

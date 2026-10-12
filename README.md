@@ -270,6 +270,40 @@ embedding 限流器同口径)。评测侧 `evals/suites/test_wiki.py` 输出
 命中率/回退率/路由开销(信息性报告,暂不进门禁):marvel golden 首测
 命中 0.40 / out-of-kb 回退 1.00 / 路由开销 p50≈1ms。
 
+### 5g. Wiki 页 Redis 热缓存(Phase 17)
+
+`WIKI_CACHE_ENABLED=true` 时,每个 RAG 的非 stale wiki 页以单个 JSON
+载荷缓存在 Redis **db 0**(避开 celery broker db1 / result backend
+db2),TTL `WIKI_CACHE_TTL_SECONDS`(默认 300s,仅为兜底——所有写路径
+都会精确 DEL 失效):
+
+- **写即失效**:摘要生成/stale 标记/文档删除/维护任务后立刻 DEL,
+  跨进程(API 与 worker 共享 Redis)一致
+- **永不破坏 chat**:Redis 任何异常 → `wiki.cache degraded` warning +
+  直接查库(BM25/rerank 同款降级姿势);连接超时压在 1.5s
+- 指标 `wiki_cache_total{result=hit|miss|degraded}`,日志
+  `wiki.cache hit/miss/degraded`
+- 测试/evals 用 stub 后端 + `WIKI_CACHE_ENABLED=0` 钉死,不连真 Redis
+
+### 5h. Wiki 自动维护(Phase 17)
+
+celery beat 两个周期任务(compose 已带 `beat` service;本地
+`celery -A app.celery_app beat --loglevel=INFO` 启动):
+
+- **`wiki_maintenance`(每 30 分钟,纯 DB)**:
+  * rescan——READY 文档的页缺失/stale/内容 hash 已发散(改名更新会
+    留下 hash 发散的伪新鲜页,更新路径的 stale 标记覆盖不到)→ 标
+    stale + 重新入队生成;
+  * lint——孤儿页清理:`source_refs` 全部指向已删文档的页删除、部分
+    失效剪 refs、slug 与现存文件名不再匹配的旧页删除,受影响 RAG 的
+    index 页重建
+- **`wiki_contradiction_scan`(每日 04:00,LLM)**:每 RAG ≥2 页时用
+  wiki LLM 比对页间矛盾,结果写进涉及页的 `notes` JSON 列
+  (migration 0016);解析失败/LLM 失败仅告警,不动已有 findings
+- **删文档即时一致性**(不等周期任务):删除文档即刻从派生页 prune
+  引用(无引用则删页)+ 重建 index + 失效缓存——此前删除会留下
+  可路由的"幽灵引用"页
+
 ### 6. 三层安全边界
 
 每个用户级 endpoint 都经过三层校验(router → service → DB filter)。
@@ -619,6 +653,7 @@ cd apps/web && npm run typecheck && npm run build
 | LLM | `LLM_PROVIDER`, `LLM_MODEL`, `LLM_OPENAI_API_KEY`, `LLM_MAX_CONTEXT_TOKENS` |
 | Wiki (Phase 15) | `WIKI_LLM_MODEL` |
 | Wiki 路由 (Phase 16) | `WIKI_ROUTE_ENABLED`, `WIKI_ROUTE_MIN_SCORE` |
+| Wiki 缓存/维护 (Phase 17) | `WIKI_CACHE_ENABLED`, `WIKI_CACHE_TTL_SECONDS` |
 | 可观测性 | `LOG_FORMAT` (`plain` / `json`), `UPLOAD_MAX_BYTES` |
 
 `JWT_SECRET` / `POSTGRES_PASSWORD` / `S3_SECRET_KEY` 在任何非

@@ -50,7 +50,11 @@ ContextVault_简历.md
 RAG文档更新后的解决方法.txt
 
 # ---- 大模型权重（GitHub 单文件 100MB 硬限制） ----
-models/
+# 锚定仓库根：裸 `models/` 会连 apps/api/app/models/（ORM 包）一起误杀
+/models/
+
+# ---- celery beat 运行产物 ----
+celerybeat-schedule*
 
 # ---- 评测运行产物 ----
 evals/results/

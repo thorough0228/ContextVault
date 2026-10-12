@@ -34,7 +34,7 @@ from app.embedding import (
 )
 from app.ingest import chunk_pages, parse_document
 from app.ingest.file_type import FileTypeError
-from app.models import Document
+from app.models import Document, WikiPage
 from app.services import document_chunk_service, document_service
 from app.storage import get_storage
 from app.db import dispose_engine, get_sessionmaker
@@ -650,6 +650,11 @@ def generate_wiki(self, document_id: str) -> dict:
             session, doc=doc, llm=llm
         )
         await wiki_service.rebuild_index_page(session, rag_id=doc.rag_id)
+        # Phase 17: the rag's cached page payload just changed — evict
+        # so the next chat turn re-reads from the DB.
+        from app.services import wiki_cache
+
+        await wiki_cache.invalidate(doc.rag_id)
         return {"document_id": document_id, "wiki_page": page.slug if page else None}
 
     try:
@@ -683,3 +688,86 @@ def mark_wiki_stale(self, document_id: str) -> dict:
             "wiki.stale.failed document_id=%s err=%s", document_id, str(exc)[:160]
         )
     return {"document_id": document_id}
+
+
+@shared_task(
+    name="app.tasks.wiki_maintenance",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+)
+def wiki_maintenance(self) -> dict:
+    """Phase 17 wiki auto-maintenance (beat, every 30 min). Pure DB:
+
+    * rescan — READY docs whose page is missing / stale / built
+      against a diverged content hash get marked + re-enqueued;
+    * lint   — orphan pages (dead provenance / rename leftovers) are
+      pruned or deleted, index pages rebuilt.
+    """
+
+    async def _do(session) -> dict:
+        from app.services import wiki_service
+
+        rescan = await wiki_service.rescan_wiki_pages(
+            session, enqueue=_enqueue_wiki_generation
+        )
+        lint = await wiki_service.lint_orphan_pages(session)
+        return {"rescan": rescan, "lint": lint}
+
+    try:
+        _call_async(_run_with_session("wiki-maintenance", _do))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "wiki.maintenance.failed err=%s", str(exc)[:160]
+        )
+        raise self.retry(exc=exc)
+    return {"status": "ok"}
+
+
+@shared_task(
+    name="app.tasks.wiki_contradiction_scan",
+    bind=True,
+    max_retries=1,
+    default_retry_delay=120,
+)
+def wiki_contradiction_scan(self) -> dict:
+    """Phase 17 wiki auto-maintenance (beat, daily 04:00, LLM). For
+    every RAG with ≥2 non-stale doc_summary pages, asks the wiki LLM
+    for contradicting page pairs and records them in each involved
+    page's ``notes``. Failures degrade per-RAG (logged, skipped)."""
+
+    from sqlalchemy import func as _func
+
+    from app.services import wiki_service
+
+    async def _do(session) -> dict:
+        llm = wiki_service._wiki_llm()
+        rag_ids = (
+            await session.scalars(
+                select(WikiPage.rag_id)
+                .where(
+                    WikiPage.kind == "doc_summary",
+                    WikiPage.stale.is_(False),
+                )
+                .group_by(WikiPage.rag_id)
+                .having(_func.count(WikiPage.id) >= 2)
+            )
+        ).all()
+        total = 0
+        scanned = 0
+        for rag_id in rag_ids:
+            findings = await wiki_service.detect_contradictions(
+                session, rag_id=rag_id, llm=llm
+            )
+            scanned += 1
+            total += len(findings)
+        return {"rags": scanned, "findings": total}
+
+    try:
+        result = _call_async(_run_with_session("wiki-contradictions", _do))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "wiki.contradictions.scan_failed err=%s", str(exc)[:160]
+        )
+        raise self.retry(exc=exc)
+    return result
