@@ -47,7 +47,9 @@ async def test_sqlite_env_boots_ingests_and_serves():
         assert turn["citations"], "citation event must precede tokens"
 
         types = [e["type"] for e in turn["events"]]
-        assert types[0] == "citation"
+        # Phase 16: the wiki-first routing decision precedes the citation.
+        assert types[0] == "route"
+        assert types[1] == "citation"
         assert types[-1] == "done"
         assert "token" in types
 

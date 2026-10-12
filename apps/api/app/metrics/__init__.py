@@ -24,6 +24,10 @@ from typing import Dict, Iterable, List, Tuple
 
 _lock = threading.Lock()
 _metrics: Dict[str, "Metric"] = {}
+# Real class references, registered right after each class definition
+# (the factory functions below shadow the class names, so anything
+# resolved later would get the factories and re-enter _get_or_create).
+_METRIC_CLASSES: Dict[str, type] = {}
 
 
 def set_backend(backend: "MetricsBackend") -> None:
@@ -43,17 +47,20 @@ def reset() -> None:
 
 
 def _get_or_create(name: str, kind: str) -> "Metric":
+    # NOTE: must not call the Counter/Histogram/Gauge factories from
+    # in here — those call back into _get_or_create, which would try
+    # to re-acquire the non-reentrant _lock on the same thread and
+    # deadlock forever (Phase 16 was the first real caller and hit
+    # exactly that). Instantiate the classes directly instead.
     with _lock:
-        if name not in _metrics:
-            if kind == "counter":
-                _metrics[name] = Counter(name)
-            elif kind == "histogram":
-                _metrics[name] = Histogram(name)
-            elif kind == "gauge":
-                _metrics[name] = Gauge(name)
-            else:
-                raise ValueError(f"unknown metric kind: {kind!r}")
-        return _metrics[name]
+        metric = _metrics.get(name)
+        if metric is None:
+            try:
+                metric = _METRIC_CLASSES[kind](name)
+            except KeyError:
+                raise ValueError(f"unknown metric kind: {kind!r}") from None
+            _metrics[name] = metric
+        return metric
 
 
 # ---- Counter ----------------------------------------------------------
@@ -78,6 +85,11 @@ class Counter:
             label_str = _format_labels(key)
             out.append(f"{self.name}{label_str} {value}")
         return out
+
+
+# Registered between the class and its factory below — at that point
+# the name still binds to the class, not the shadowing factory.
+_METRIC_CLASSES["counter"] = Counter
 
 
 def Counter(name: str) -> Counter:  # type: ignore[no-redef]
@@ -133,6 +145,9 @@ class Histogram:
         return out
 
 
+_METRIC_CLASSES["histogram"] = Histogram
+
+
 def Histogram(name: str) -> Histogram:  # type: ignore[no-redef]
     return _get_or_create(name, "histogram")  # type: ignore[return-value]
 
@@ -159,6 +174,9 @@ class Gauge:
             lbl = _format_labels(key)
             out.append(f"{self.name}{lbl} {value}")
         return out
+
+
+_METRIC_CLASSES["gauge"] = Gauge
 
 
 def Gauge(name: str) -> Gauge:  # type: ignore[no-redef]

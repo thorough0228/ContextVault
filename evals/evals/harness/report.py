@@ -130,10 +130,15 @@ def update_baseline(
 
 # Metric keys where a HIGHER value is worse (counts of failures/leaks).
 # compare_to_baseline flips the regression direction for these.
+# Phase 16 wiki suite: fallback rate and route latency are pre-registered
+# here so a future baseline promotion can't accidentally invert direction.
 LOWER_IS_BETTER_KEYS = {
     "canary_leak_queries",
     "system_prompt_leak_queries",
     "judge_errors",
+    "wiki_fallback_rate",
+    "wiki_route_overhead_ms_p50",
+    "wiki_route_overhead_ms_p95",
 }
 
 

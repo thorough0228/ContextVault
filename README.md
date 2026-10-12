@@ -249,6 +249,27 @@ embedding 的 OpenAI 兼容端点 + key 跑指定模型(如硅基流动
 LLM 失败静默降级(wiki 缺页不影响 chunk RAG 主链路),日志以
 `wiki.summary.llm_failed`(ERROR)暴露。
 
+### 5f. Wiki 优先路由 + 路由指标(Phase 16)
+
+chat 每轮先做 wiki 词法打分(纯 DB + 分词,实测 p50 < 1ms):
+
+- **命中**(`WIKI_ROUTE_ENABLED=true` 且 top 页 score ≥
+  `WIKI_ROUTE_MIN_SCORE`,默认 0.3)→ **跳过 chunk 检索**,直接用 wiki
+  页 digest 作上下文回答;引用从页的 `source_refs` 合成为文档级
+  citation(`metadata.source="wiki"`,前端显示绿色 Wiki 徽标,历史回放
+  同样生效)
+- **未命中/开关关闭** → 原有 chunk 检索 + wiki 附加注入(Phase 15 行为)
+- 流式协议新增 `route` 事件(在 citation 前)与 `done.route` 字段,
+  未知事件类型对旧客户端无影响
+
+**指标**(此前空置的 `app/metrics` 注册表首次接入,
+`GET /api/v1/metrics`,admin only):`chat_route_total{route}`、
+`chat_search_seconds` / `chat_llm_seconds` 直方图、
+`llm_tokens_estimated_total{kind}`(token 用 (chars+8)/2 估算,与
+embedding 限流器同口径)。评测侧 `evals/suites/test_wiki.py` 输出
+命中率/回退率/路由开销(信息性报告,暂不进门禁):marvel golden 首测
+命中 0.40 / out-of-kb 回退 1.00 / 路由开销 p50≈1ms。
+
 ### 6. 三层安全边界
 
 每个用户级 endpoint 都经过三层校验(router → service → DB filter)。
@@ -597,6 +618,7 @@ cd apps/web && npm run typecheck && npm run build
 | Embedding | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSION` |
 | LLM | `LLM_PROVIDER`, `LLM_MODEL`, `LLM_OPENAI_API_KEY`, `LLM_MAX_CONTEXT_TOKENS` |
 | Wiki (Phase 15) | `WIKI_LLM_MODEL` |
+| Wiki 路由 (Phase 16) | `WIKI_ROUTE_ENABLED`, `WIKI_ROUTE_MIN_SCORE` |
 | 可观测性 | `LOG_FORMAT` (`plain` / `json`), `UPLOAD_MAX_BYTES` |
 
 `JWT_SECRET` / `POSTGRES_PASSWORD` / `S3_SECRET_KEY` 在任何非

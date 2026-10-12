@@ -206,6 +206,14 @@ export interface ChatCitationEvent {
   citations: Citation[];
 }
 
+export interface ChatRouteEvent {
+  type: "route";
+  /** "wiki" = answered from distilled wiki pages (chunks skipped) */
+  route: "wiki" | "chunks";
+  score: number;
+  wiki_slugs: string[];
+}
+
 export interface ChatTokenEvent {
   type: "token";
   delta: string;
@@ -216,6 +224,8 @@ export interface ChatDoneEvent {
   message_id: string;
   conversation_id: string;
   citations: Citation[];
+  route?: "wiki" | "chunks";
+  wiki_slugs?: string[];
 }
 
 export interface ChatErrorEvent {
@@ -225,6 +235,7 @@ export interface ChatErrorEvent {
 }
 
 export type ChatStreamEvent =
+  | ChatRouteEvent
   | ChatCitationEvent
   | ChatTokenEvent
   | ChatDoneEvent

@@ -80,13 +80,15 @@ class TestHappyPathContract:
                 rag_id=rag_id, message="反胶和长胶有什么区别？",
             )
 
-            # Event order: citation first, token stream, done terminal.
+            # Event order (Phase 16): route decision, then citation,
+            # token stream, done terminal.
             types = [e["type"] for e in turn["events"]]
             assert turn["terminal"] == "done"
-            assert types[0] == "citation"
+            assert types[0] == "route"
+            assert types[1] == "citation"
             assert types[-1] == "done"
             assert "token" in types
-            assert types.index("token") == 1, (
+            assert types.index("token") == 2, (
                 "tokens must directly follow the citation event"
             )
             assert turn["answer"] == "答案第一部分"

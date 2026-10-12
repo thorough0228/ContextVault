@@ -301,10 +301,41 @@ async def wiki_context_for_query(
                 "title": page.title,
                 "content": page.content,
                 "score": overlap / len(q_tokens),
+                "source_refs": page.source_refs or [],
             }
         )
     scored.sort(key=lambda h: h["score"], reverse=True)
     return scored[:top_k]
+
+
+def wiki_citations_from_pages(pages: List[dict]) -> List[dict]:
+    """Synthesise document-level citation dicts from wiki pages.
+
+    A wiki page's ``source_refs`` carry the provenance frontier
+    ({document_id, content_hash, filename}); the routed answer cites
+    documents, not chunks. ``chunk_id``/``page_number`` are synthesised
+    because the Citation schema requires them.
+    """
+
+    out: List[dict] = []
+    for p in pages:
+        for ref in p.get("source_refs") or []:
+            out.append(
+                {
+                    "chunk_id": f"wiki:{p['slug']}:{ref.get('document_id')}",
+                    "document_id": ref.get("document_id"),
+                    "filename": ref.get("filename") or p["slug"],
+                    "page_number": 0,
+                    "chunk_text": p["content"],
+                    "retrieval_score": float(p["score"]),
+                    "metadata": {
+                        "source": "wiki",
+                        "slug": p["slug"],
+                        "content_hash": ref.get("content_hash"),
+                    },
+                }
+            )
+    return out
 
 
 

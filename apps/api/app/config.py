@@ -212,6 +212,15 @@ class Settings(BaseSettings):
     # embedding API key (e.g. SiliconFlow "Qwen/Qwen2.5-32B-Instruct")
     # — useful when the main LLM account is separate/out of credit.
     wiki_llm_model: str = ""
+    # Wiki-first routing (Phase 16): when enabled, a chat turn whose
+    # query lexically matches a non-stale wiki page at or above
+    # wiki_route_min_score is answered from the distilled pages and
+    # SKIPS chunk retrieval entirely (citations are synthesised from
+    # page provenance). A miss — or the flag being off — falls back to
+    # the regular search, with wiki pages remaining an extra prompt
+    # block (Phase 15 behaviour).
+    wiki_route_enabled: bool = False
+    wiki_route_min_score: float = 0.3
 
     # ---- LLM (Phase 5) ----
     # All values come from .env / environment. The default provider

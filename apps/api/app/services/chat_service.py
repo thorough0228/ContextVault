@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime
 from typing import AsyncIterator, List, Optional, Sequence, Tuple
 
@@ -37,12 +38,14 @@ from app.embedding import (
 )
 from app.exceptions import NotFoundError
 from app.llm import LLMProvider, get_llm_provider
+from app.metrics import Counter, Histogram
 from app.models import Conversation, Message
 from app.schemas.chat import (
     Citation,
     ChatEventCitation,
     ChatEventDone,
     ChatEventError,
+    ChatEventRoute,
     ChatEventToken,
 )
 from app.services import rag_service, search_service, wiki_service
@@ -94,6 +97,13 @@ def _build_context_block(citations: Sequence[Citation]) -> str:
         )
         parts.append(f"{header}\n{c.chunk_text}")
     return "\n\n---\n\n".join(parts)
+
+
+def _estimate_tokens(text_len: int) -> int:
+    """Rough token estimate — the same ``(chars + 8) / 2`` heuristic
+    the embedding provider's rate limiter uses. Good enough for cost
+    trends; no provider-protocol change needed."""
+    return (text_len + 8) // 2
 
 
 def _build_prompt_messages(
@@ -328,6 +338,8 @@ async def stream_chat_turn(
     """Yield one NDJSON line per event for the entire chat turn.
 
     Yields:
+        * ``route`` once (Phase 16 wiki-first routing decision),
+          before the citation event
         * ``citation`` once, before any tokens
         * ``token`` events for each LLM delta
         * ``done`` (terminal) — message persisted
@@ -368,27 +380,81 @@ async def stream_chat_turn(
     await _compress_history_if_needed(db, conv=conv, history=history, llm=llm)
     memories = await _fetch_user_memories(db, user_id=user_id, rag_id=rag_id)
 
-    # 4. Retrieve context — fall back gracefully on embedding errors.
-    citations: List[Citation] = []
+    # 4. Phase 16 wiki-first routing. Score the query against the
+    # non-stale wiki pages BEFORE touching chunk retrieval — the
+    # lexical scorer is cheap, and a hit answers from the distilled
+    # layer without paying for search at all. The same page list is
+    # reused as the Phase 15 extra prompt block on a miss, so the
+    # lookup happens exactly once per turn in either path.
+    wiki_pages_list: List[dict] = []
+    wiki_route_score = 0.0
+    route_t0 = time.perf_counter()
     try:
-        hits = await search_service.search_rag(
-            db,
-            user_id=user_id,
-            rag_id=rag_id,
-            query=user_message,
-            top_k=effective_top_k,
-            provider=get_embedding_provider(),
+        wiki_pages_list = await wiki_service.wiki_context_for_query(
+            db, rag_id=rag_id, query=user_message
         )
-    except search_service.SearchError as exc:
-        # Embedding failure → degrade to a no-context answer rather
-        # than blowing up the whole chat. The LLM is told explicitly
-        # that no context was retrieved.
-        logger.warning(
-            "chat.search_degraded code=%s message=%s",
-            exc.code, exc.message,
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("chat.wiki_degraded err=%s", str(exc)[:120])
+        wiki_pages_list = []
+    if wiki_pages_list:
+        wiki_route_score = float(wiki_pages_list[0]["score"])
+    wiki_hit = (
+        settings.wiki_route_enabled
+        and wiki_route_score >= settings.wiki_route_min_score
+    )
+    route = "wiki" if wiki_hit else "chunks"
+    wiki_slugs = [p["slug"] for p in wiki_pages_list]
+    route_ms = (time.perf_counter() - route_t0) * 1000.0
+    logger.info(
+        "chat.route route=%s score=%.3f pages=%d elapsed_ms=%.1f",
+        route, wiki_route_score, len(wiki_pages_list), route_ms,
+    )
+    Counter("chat_route_total").inc(route=route)
+
+    # Routing decision goes on the stream before the citation event so
+    # it survives even an LLM failure later in the turn.
+    yield _event(
+        ChatEventRoute(
+            route=route, score=wiki_route_score, wiki_slugs=wiki_slugs,
         )
-        citations = []
+    )
+
+    # 5. Context. Wiki hit → synthesise document-level citations from
+    # page provenance and skip chunk retrieval entirely (the digest IS
+    # the context, so no extra wiki block further down). Miss → regular
+    # search with graceful degradation, wiki pages stay an additional
+    # distilled block (Phase 15 behaviour).
+    citations: List[Citation] = []
+    prompt_wiki_pages: List[dict] = []
+    if wiki_hit:
+        citations = [
+            Citation(**c)
+            for c in wiki_service.wiki_citations_from_pages(wiki_pages_list)
+        ]
     else:
+        search_t0 = time.perf_counter()
+        try:
+            hits = await search_service.search_rag(
+                db,
+                user_id=user_id,
+                rag_id=rag_id,
+                query=user_message,
+                top_k=effective_top_k,
+                provider=get_embedding_provider(),
+            )
+        except search_service.SearchError as exc:
+            # Embedding failure → degrade to a no-context answer rather
+            # than blowing up the whole chat. The LLM is told explicitly
+            # that no context was retrieved.
+            logger.warning(
+                "chat.search_degraded code=%s message=%s",
+                exc.code, exc.message,
+            )
+            hits = []
+        finally:
+            Histogram("chat_search_seconds").observe(
+                time.perf_counter() - search_t0
+            )
         for h in hits:
             citations.append(
                 Citation(
@@ -401,22 +467,12 @@ async def stream_chat_turn(
                     metadata=h.get("metadata"),
                 )
             )
+        prompt_wiki_pages = wiki_pages_list
 
-    # 5. Citation event
+    # 6. Citation event
     yield _event(ChatEventCitation(citations=citations))
 
-    # 5b. Phase 15 wiki layer: non-stale wiki pages matching the query
-    # become an additional distilled context block (the compiled
-    # knowledge layer sits above raw chunks).
-    wiki_pages_list: List[dict] = []
-    try:
-        wiki_pages_list = await wiki_service.wiki_context_for_query(
-            db, rag_id=rag_id, query=user_message
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("chat.wiki_degraded err=%s", str(exc)[:120])
-
-    # 6. Prompt + LLM stream
+    # 7. Prompt + LLM stream
     context_block = _build_context_block(citations)
     messages = _build_prompt_messages(
         system_prompt=SYSTEM_PROMPT,
@@ -425,9 +481,10 @@ async def stream_chat_turn(
         user_message=user_message,
         conversation_summary=conv.summary,
         memories=memories,
-        wiki_pages=wiki_pages_list,
+        wiki_pages=prompt_wiki_pages,
     )
 
+    llm_t0 = time.perf_counter()
     full_text_parts: List[str] = []
     try:
         # Phase 6: wrap the stream in a tenacity retry so a transient
@@ -513,6 +570,17 @@ async def stream_chat_turn(
         return
 
     full_text = "".join(full_text_parts)
+    Histogram("chat_llm_seconds").observe(time.perf_counter() - llm_t0)
+    # Estimated token cost of the turn (prompt + completion), see
+    # _estimate_tokens — feeds llm_tokens_estimated_total for the
+    # Phase 16 cost metrics.
+    Counter("llm_tokens_estimated_total").inc(
+        _estimate_tokens(sum(len(str(m.get("content") or "")) for m in messages)),
+        kind="prompt",
+    )
+    Counter("llm_tokens_estimated_total").inc(
+        _estimate_tokens(len(full_text)), kind="completion",
+    )
 
     # 7. Persist assistant message
     asst_msg = Message(
@@ -553,6 +621,8 @@ async def stream_chat_turn(
             message_id=asst_msg.id,
             conversation_id=conv.id,
             citations=citations,
+            route=route,
+            wiki_slugs=wiki_slugs,
         )
     )
 

@@ -71,7 +71,9 @@ class TestOfflineMechanics:
                     f"{query['id']}: retrieval must stay attached under attack"
                 )
                 types = [e["type"] for e in turn["events"]]
-                assert types[0] == "citation" and types[-1] == "done"
+                # Phase 16: route decision is emitted before citations.
+                assert types[0] == "route" and types[1] == "citation"
+                assert types[-1] == "done"
 
 
 async def _run_online(env) -> tuple[dict, list[dict], list[str]]:

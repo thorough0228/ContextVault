@@ -317,15 +317,21 @@ function MessageBubble({ msg }: { msg: UIMessage }) {
               isUser ? "text-brand-50" : "text-slate-500"
             }`}
           >
-            {msg.citations.map((c, i) => (
-              <span
-                key={c.chunk_id}
-                title={`${c.filename} · page ${c.page_number} · score ${c.retrieval_score.toFixed(2)}`}
-                className="inline-flex items-center gap-1 rounded bg-black/10 px-2 py-0.5 text-[10px] font-mono"
-              >
-                [{i + 1}] {c.filename} p.{c.page_number}
-              </span>
-            ))}
+            {msg.citations.map((c, i) => {
+              const isWiki = c.metadata?.source === "wiki";
+              return (
+                <span
+                  key={c.chunk_id}
+                  title={`${c.filename} · ${isWiki ? "wiki digest" : `page ${c.page_number}`} · score ${c.retrieval_score.toFixed(2)}`}
+                  className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-mono ${
+                    isWiki ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300" : "bg-black/10"
+                  }`}
+                >
+                  [{i + 1}] {isWiki ? "Wiki·" : ""}{c.filename}
+                  {!isWiki && ` p.${c.page_number}`}
+                </span>
+              );
+            })}
           </div>
         )}
       </div>

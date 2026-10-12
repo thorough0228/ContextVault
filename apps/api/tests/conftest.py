@@ -42,6 +42,14 @@ os.environ.setdefault("MEMORY_INJECTION_ENABLED", "0")
 os.environ.setdefault("PDF_PARSER", "pymupdf")
 os.environ.setdefault("PDF_PARSER_TIMEOUT_SECONDS", "120")
 os.environ.setdefault("MEMORY_INJECTION_ENABLED", "0")
+# Phase 15 wiki: an inherited WIKI_LLM_MODEL would make the eager
+# worker call the real summary LLM (SiliconFlow) from inside tests —
+# pin to the main (hash) provider, same determinism contract as above.
+os.environ.setdefault("WIKI_LLM_MODEL", "")
+# Phase 16: routing-specific tests opt in via monkeypatch; every other
+# test assumes the legacy (route-off) chat behaviour regardless of the
+# developer's .env.
+os.environ.setdefault("WIKI_ROUTE_ENABLED", "false")
 
 import httpx
 import pytest
