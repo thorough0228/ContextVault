@@ -48,7 +48,7 @@ from app.schemas.chat import (
     ChatEventRoute,
     ChatEventToken,
 )
-from app.services import rag_service, search_service, wiki_service
+from app.services import rag_service, search_service, wiki_router, wiki_service
 
 logger = logging.getLogger(__name__)
 
@@ -338,7 +338,8 @@ async def stream_chat_turn(
     """Yield one NDJSON line per event for the entire chat turn.
 
     Yields:
-        * ``route`` once (Phase 16 wiki-first routing decision),
+        * ``route`` once (Phase 18 four-way boundary routing decision:
+          wiki_only / wiki_plus_rag / rag_only / abstain, with reason),
           before the citation event
         * ``citation`` once, before any tokens
         * ``token`` events for each LLM delta
@@ -380,34 +381,28 @@ async def stream_chat_turn(
     await _compress_history_if_needed(db, conv=conv, history=history, llm=llm)
     memories = await _fetch_user_memories(db, user_id=user_id, rag_id=rag_id)
 
-    # 4. Phase 16 wiki-first routing. Score the query against the
-    # non-stale wiki pages BEFORE touching chunk retrieval — the
-    # lexical scorer is cheap, and a hit answers from the distilled
-    # layer without paying for search at all. The same page list is
-    # reused as the Phase 15 extra prompt block on a miss, so the
-    # lookup happens exactly once per turn in either path.
-    wiki_pages_list: List[dict] = []
-    wiki_route_score = 0.0
+    # 4. Phase 18 wiki boundary routing. The router scores the query
+    # against the (cached) non-stale pages and checks the full boundary
+    # — fresh, trusted, exactness, declared coverage — returning one of
+    # wiki_only / wiki_plus_rag / rag_only / abstain. Lookup happens
+    # exactly once per turn.
     route_t0 = time.perf_counter()
     try:
-        wiki_pages_list = await wiki_service.wiki_context_for_query(
+        decision = await wiki_router.route_for_query(
             db, rag_id=rag_id, query=user_message
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("chat.wiki_degraded err=%s", str(exc)[:120])
-        wiki_pages_list = []
-    if wiki_pages_list:
-        wiki_route_score = float(wiki_pages_list[0]["score"])
-    wiki_hit = (
-        settings.wiki_route_enabled
-        and wiki_route_score >= settings.wiki_route_min_score
-    )
-    route = "wiki" if wiki_hit else "chunks"
-    wiki_slugs = [p["slug"] for p in wiki_pages_list]
+        logger.warning("chat.wiki_route_degraded err=%s", str(exc)[:120])
+        decision = wiki_router.RouteDecision(
+            wiki_router.ROUTE_RAG_ONLY, "router_degraded", 0.0
+        )
+    route = decision.route
+    wiki_slugs = decision.slugs
     route_ms = (time.perf_counter() - route_t0) * 1000.0
     logger.info(
-        "chat.route route=%s score=%.3f pages=%d elapsed_ms=%.1f",
-        route, wiki_route_score, len(wiki_pages_list), route_ms,
+        "chat.route route=%s reason=%s score=%.3f pages=%d elapsed_ms=%.1f",
+        route, decision.reason, decision.score,
+        len(decision.pages), route_ms,
     )
     Counter("chat_route_total").inc(route=route)
 
@@ -415,21 +410,47 @@ async def stream_chat_turn(
     # it survives even an LLM failure later in the turn.
     yield _event(
         ChatEventRoute(
-            route=route, score=wiki_route_score, wiki_slugs=wiki_slugs,
+            route=route, reason=decision.reason,
+            score=decision.score, wiki_slugs=wiki_slugs,
         )
     )
 
-    # 5. Context. Wiki hit → synthesise document-level citations from
-    # page provenance and skip chunk retrieval entirely (the digest IS
-    # the context, so no extra wiki block further down). Miss → regular
-    # search with graceful degradation, wiki pages stay an additional
-    # distilled block (Phase 15 behaviour).
+    if route == wiki_router.ROUTE_ABSTAIN:
+        # Deterministic refusal — an unresolved conflict never reaches
+        # the LLM, so it cannot be papered over into a plausible answer.
+        text = wiki_router.abstain_message(user_message)
+        for i in range(0, len(text), 24):
+            yield _event(ChatEventToken(delta=text[i : i + 24]))
+        asst_msg = Message(
+            conversation_id=conv.id, role="assistant", content=text,
+            citations=[],
+        )
+        db.add(asst_msg)
+        conv.updated_at = datetime.utcnow()
+        await db.flush()
+        await db.refresh(asst_msg)
+        yield _event(
+            ChatEventDone(
+                message_id=asst_msg.id,
+                conversation_id=conv.id,
+                citations=[],
+                route=route,
+                wiki_slugs=wiki_slugs,
+            )
+        )
+        return
+
+    # 5. Context. WIKI_ONLY → synthesise document-level citations from
+    # page provenance and skip chunk retrieval (the digest IS the
+    # context). WIKI_PLUS_RAG / RAG_ONLY → regular search with graceful
+    # degradation; the matched pages (leads) stay an additional
+    # distilled block.
     citations: List[Citation] = []
     prompt_wiki_pages: List[dict] = []
-    if wiki_hit:
+    if route == wiki_router.ROUTE_WIKI_ONLY:
         citations = [
             Citation(**c)
-            for c in wiki_service.wiki_citations_from_pages(wiki_pages_list)
+            for c in wiki_service.wiki_citations_from_pages(decision.pages)
         ]
     else:
         search_t0 = time.perf_counter()
@@ -467,7 +488,7 @@ async def stream_chat_turn(
                     metadata=h.get("metadata"),
                 )
             )
-        prompt_wiki_pages = wiki_pages_list
+        prompt_wiki_pages = decision.pages
 
     # 6. Citation event
     yield _event(ChatEventCitation(citations=citations))

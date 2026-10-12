@@ -68,3 +68,21 @@ def tokenize(text: str) -> List[str]:
 
 def tokenize_to_string(text: str) -> str:
     return " ".join(tokenize(text))
+
+
+# Function words that carry no topical signal. Wiki-page scoring
+# (Phase 18) filters these from BOTH sides of the overlap so an
+# out-of-kb question cannot ride "who is the" into a wiki-only route.
+STOPWORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
+    "has", "have", "in", "is", "it", "its", "of", "on", "or", "that",
+    "the", "this", "to", "was", "were", "what", "which", "who", "will",
+    "with", "的", "了", "是", "在", "有", "和", "与", "及", "对", "把",
+    "被", "将", "这", "那",
+})
+
+
+def content_tokens(text: str) -> set:
+    """Token set with stopwords removed — topical signal only."""
+
+    return {t for t in tokenize(text) if t not in STOPWORDS}

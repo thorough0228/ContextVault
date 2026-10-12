@@ -249,26 +249,39 @@ embedding 的 OpenAI 兼容端点 + key 跑指定模型(如硅基流动
 LLM 失败静默降级(wiki 缺页不影响 chunk RAG 主链路),日志以
 `wiki.summary.llm_failed`(ERROR)暴露。
 
-### 5f. Wiki 优先路由 + 路由指标(Phase 16)
+### 5f. Wiki 边界路由(Phase 18,四路 Query Router)
 
-chat 每轮先做 wiki 词法打分(纯 DB + 分词,实测 p50 < 1ms):
+Wiki 页是有边界的知识单元,不是天然正确的事实库。chat 每轮先做
+wiki 词法打分(纯 DB + 分词,实测 p50 < 1ms),路由器按**可检查的
+边界条件**判定四种出路,而不是"命中就不查 RAG":
 
-- **命中**(`WIKI_ROUTE_ENABLED=true` 且 top 页 score ≥
-  `WIKI_ROUTE_MIN_SCORE`,默认 0.3)→ **跳过 chunk 检索**,直接用 wiki
-  页 digest 作上下文回答;引用从页的 `source_refs` 合成为文档级
-  citation(`metadata.source="wiki"`,前端显示绿色 Wiki 徽标,历史回放
-  同样生效)
-- **未命中/开关关闭** → 原有 chunk 检索 + wiki 附加注入(Phase 15 行为)
-- 流式协议新增 `route` 事件(在 citation 前)与 `done.route` 字段,
-  未知事件类型对旧客户端无影响
+| 路由 | 判定(按序,全部确定性) | 行为 |
+|---|---|---|
+| `rag_only` | 无相关页(score < `WIKI_ROUTE_MIN_SCORE`) | 正常 chunk 检索 |
+| `wiki_plus_rag` | 命中页 STALE(hash live 比对发散/源已删)、部分冲突、问题要求**精确核验**(逐字/原文/页码/条款号/对比类)或触及 `does_not_cover` 声明 | chunk 检索 + wiki 作线索块注入,引用保持 chunk 级可追溯 |
+| `abstain` | 命中的**全部**知识页都有未解决冲突 | 模板化确定性拒答(不进 LLM),提示查原文 |
+| `wiki_only` | 全部通过:相关 + 新鲜 + 可信 + 无精确核验需求 + 未触及声明盲区 | 跳过 chunk 检索,文档级引用(`metadata.source="wiki"`) |
 
-**指标**(此前空置的 `app/metrics` 注册表首次接入,
-`GET /api/v1/metrics`,admin only):`chat_route_total{route}`、
+**页面边界元数据**(migration 0017,`wiki_pages.meta`):摘要 LLM 在
+页尾输出 ```wiki-meta 围栏声明 `covers` / `does_not_cover`(入库前
+剥离,只作路由提示、不绝对保证);`version` 每次重编译 +1。**状态
+机械派生**:STALE=源发散/已删;CONFLICTED=`notes` 有矛盾 findings;
+否则 VERIFIED——"已验证"由可检查条件决定,不由模型自评。
+
+流式协议:`route` 事件(route/reason/score/slugs)+ `done.route`;
+前端按路由着色(Wiki/Wiki+原文/原文检索/已拒答)。指标
+`chat_route_total{route}` 照旧。
+
+**路由评测**(`evals/suites/test_wiki_router.py`,标注 18 条 × marvel
+真实摘要页,信息性报告):首测 **wiki_only 误判率 0 / 必要回退召回
+1.0**(硬底线)、不必要回退 0.167、route accuracy 0.611——accuracy
+的主要损耗是中文查询对英文摘要页的词面差距(诚实回退,非误答)。
+阈值与启发式按此口径持续调整,不拍脑袋。
+
+配套指标(`GET /api/v1/metrics`,admin only):`chat_route_total{route}`、
 `chat_search_seconds` / `chat_llm_seconds` 直方图、
-`llm_tokens_estimated_total{kind}`(token 用 (chars+8)/2 估算,与
-embedding 限流器同口径)。评测侧 `evals/suites/test_wiki.py` 输出
-命中率/回退率/路由开销(信息性报告,暂不进门禁):marvel golden 首测
-命中 0.40 / out-of-kb 回退 1.00 / 路由开销 p50≈1ms。
+`llm_tokens_estimated_total{kind}`(token 按 (chars+8)/2 估算);
+wiki 页热缓存见 5g。
 
 ### 5g. Wiki 页 Redis 热缓存(Phase 17)
 

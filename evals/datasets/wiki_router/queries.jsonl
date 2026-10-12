@@ -1,0 +1,18 @@
+{"id": "wr-01", "corpus": "marvel", "query": "Who directed the 1978 movie Spider-Man Strikes Back and what is its runtime?", "expected": "wiki_only", "note": "key-fact lookup the distilled page should retain"}
+{"id": "wr-02", "corpus": "marvel", "query": "1978年的电影《蜘蛛侠反击》是由谁执导的？片长是多少？", "expected": "wiki_only", "note": "cross-lingual key-fact lookup"}
+{"id": "wr-03", "corpus": "marvel", "query": "What is the tagline of the 1990 movie The Death of the Incredible Hulk?", "expected": "wiki_only", "note": "single-fact lookup"}
+{"id": "wr-04", "corpus": "marvel", "query": "Which actors played Bruce Banner in the Hulk television movies?", "expected": "wiki_only", "note": "entity fact"}
+{"id": "wr-05", "corpus": "marvel", "query": "What year was the short film Spider-Man released?", "expected": "wiki_only", "note": "single-fact lookup"}
+{"id": "wr-06", "corpus": "marvel", "query": "Who directed the 1989 movie The Trial of the Incredible Hulk?", "expected": "wiki_only", "note": "entity fact"}
+{"id": "wr-07", "corpus": "marvel", "query": "请逐字引用 1978 年《蜘蛛侠反击》的原文台词，并给出页码", "expected": "must_rag", "note": "verbatim + page number — distilled page may have rewritten the wording"}
+{"id": "wr-08", "corpus": "marvel", "query": "Quote the exact wording of the tagline of the 1990 movie The Death of the Incredible Hulk", "expected": "must_rag", "note": "exact quote request"}
+{"id": "wr-09", "corpus": "marvel", "query": "对比 1978 年《蜘蛛侠反击》和 1989 年《无敌浩克的审判》的导演与片长差异", "expected": "must_rag", "note": "comparison across two entries — single distilled page may drop relations"}
+{"id": "wr-10", "corpus": "marvel", "query": "Compare the runtimes of the 1978 Spider-Man movie and the 1989 Trial of the Incredible Hulk", "expected": "must_rag", "note": "comparison across entries"}
+{"id": "wr-11", "corpus": "marvel", "query": "这份漫威资料里第 3 章的具体条款原文是什么？", "expected": "must_rag", "note": "section/clause original text"}
+{"id": "wr-12", "corpus": "marvel", "query": "List every movie in the dataset verbatim with exact page numbers", "expected": "must_rag", "note": "verbatim + page numbers + exhaustive list"}
+{"id": "wr-13", "corpus": "marvel", "query": "Who is the current president of France?", "expected": "rag_only", "note": "out of knowledge base"}
+{"id": "wr-14", "corpus": "marvel", "query": "What rubber and blade combination does Ma Long currently use?", "expected": "rag_only", "note": "out of knowledge base"}
+{"id": "wr-15", "corpus": "marvel", "query": "根据中国《公司法》，股东何时对公司债务承担连带责任？", "expected": "rag_only", "note": "out of knowledge base"}
+{"id": "wr-16", "corpus": "marvel", "query": "今晚的天气怎么样？", "expected": "rag_only", "note": "out of knowledge base"}
+{"id": "wr-17", "corpus": "marvel", "query": "Who directed the 1978 Spider-Man Strikes Back movie?", "expected": "abstain", "note": "suite forces notes.contradictions on the page before this one"}
+{"id": "wr-18", "corpus": "marvel", "query": "Who directed the 1978 Spider-Man short film?", "expected": "abstain", "note": "conflicted page — second probe"}

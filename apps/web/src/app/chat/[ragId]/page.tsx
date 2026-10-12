@@ -8,10 +8,25 @@ import { useSession } from "@/lib/auth-store";
 import MarkdownContent from "@/components/markdown-content";
 import type {
   ChatMessage,
+  ChatRouteValue,
   Citation,
   ConversationPublic,
   Rag,
 } from "@contextvault/shared";
+
+const ROUTE_LABELS: Record<ChatRouteValue, string> = {
+  wiki_only: "Wiki",
+  wiki_plus_rag: "Wiki+原文",
+  rag_only: "原文检索",
+  abstain: "已拒答（证据冲突）",
+};
+
+const ROUTE_STYLES: Record<ChatRouteValue, string> = {
+  wiki_only: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
+  wiki_plus_rag: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
+  rag_only: "bg-slate-500/15 text-slate-600 dark:text-slate-300",
+  abstain: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+};
 
 interface UIMessage {
   id: string;
@@ -20,6 +35,8 @@ interface UIMessage {
   citations: Citation[];
   /** Set while the assistant is still streaming this turn. */
   streaming?: boolean;
+  /** Phase 18 boundary route the answer travelled on. */
+  route?: ChatRouteValue;
 }
 
 export default function ChatPage() {
@@ -145,7 +162,7 @@ export default function ChatPage() {
           setMessages((prev) =>
             prev.map((m) =>
               m.id === tempAsstId
-                ? { ...m, id: event.message_id, streaming: false, citations: event.citations }
+                ? { ...m, id: event.message_id, streaming: false, citations: event.citations, route: event.route }
                 : m,
             ),
           );
@@ -304,6 +321,13 @@ function MessageBubble({ msg }: { msg: UIMessage }) {
             : "overflow-x-auto bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-slate-100"
         }`}
       >
+        {!isUser && msg.route && !msg.streaming && (
+          <span
+            className={`mb-2 inline-flex rounded px-2 py-0.5 text-[10px] font-mono ${ROUTE_STYLES[msg.route]}`}
+          >
+            {ROUTE_LABELS[msg.route]}
+          </span>
+        )}
         {isUser
           ? msg.content
           : msg.content

@@ -148,10 +148,12 @@ async def _query_pages(db: AsyncSession, *, rag_id: str) -> List[dict]:
     return [
         {
             "slug": p.slug,
+            "kind": p.kind,
             "title": p.title,
             "content": p.content,
             "source_refs": p.source_refs or [],
             "notes": p.notes,
+            "meta": p.meta,
         }
         for p in rows.all()
     ]

@@ -10,16 +10,18 @@ reacts:
 * ``{"type": "citation", "citations": [...]}`` — sent once, before
   any tokens. The array is the list of :class:`Citation` shapes
   the LLM will see in its context.
-* ``{"type": "route", "route": "wiki"|"chunks", "score": 0.57,
-  "wiki_slugs": [...]}`` — Phase 16 wiki-first routing decision,
-  sent once before the citation event. ``wiki`` means the answer is
-  composed from distilled wiki pages (chunk retrieval skipped);
-  ``chunks`` is the regular retrieval path. Clients that don't know
-  this event can ignore it.
+* ``{"type": "route", "route": "wiki_only"|"wiki_plus_rag"|"rag_only"|
+  "abstain", "reason": "...", "score": 0.57, "wiki_slugs": [...]}`` —
+  Phase 18 boundary routing decision, sent once before the citation
+  event. ``wiki_only`` = answered from distilled pages (chunks
+  skipped); ``wiki_plus_rag`` = wiki as leads, chunks as evidence;
+  ``rag_only`` = regular retrieval; ``abstain`` = deterministic
+  refusal (unresolved conflicts — no LLM in the loop). Clients that
+  don't know this event can ignore it.
 * ``{"type": "token", "delta": "..."}`` — incremental assistant
   text. Many of these over the lifetime of a turn.
 * ``{"type": "done", "message_id": "...", "conversation_id": "...",
-  "route": "wiki"|"chunks", "wiki_slugs": [...]}``
+  "route": ..., "wiki_slugs": [...]}``
   — terminal. After this the client should consider the turn
   complete; further writes are not expected.
 * ``{"type": "error", "code": "...", "message": "..."}`` —
@@ -99,11 +101,18 @@ class ChatEventCitation(BaseModel):
     citations: List[Citation]
 
 
+RouteValue = Literal["wiki_only", "wiki_plus_rag", "rag_only", "abstain"]
+
+
 class ChatEventRoute(BaseModel):
-    """Phase 16 wiki-first routing decision (before the citation)."""
+    """Phase 18 boundary routing decision (before the citation)."""
 
     type: Literal["route"] = "route"
-    route: Literal["wiki", "chunks"]
+    route: RouteValue
+    reason: str = Field(
+        default="",
+        description="Machine-readable check that decided this route",
+    )
     score: float = Field(
         description="Top wiki page lexical score this decision was made on"
     )
@@ -120,7 +129,7 @@ class ChatEventDone(BaseModel):
     message_id: str
     conversation_id: str
     citations: List[Citation] = Field(default_factory=list)
-    route: Literal["wiki", "chunks"] = "chunks"
+    route: RouteValue = "rag_only"
     wiki_slugs: List[str] = Field(default_factory=list)
 
 

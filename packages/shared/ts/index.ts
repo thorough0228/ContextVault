@@ -206,10 +206,18 @@ export interface ChatCitationEvent {
   citations: Citation[];
 }
 
+export type ChatRouteValue =
+  | "wiki_only"
+  | "wiki_plus_rag"
+  | "rag_only"
+  | "abstain";
+
 export interface ChatRouteEvent {
   type: "route";
-  /** "wiki" = answered from distilled wiki pages (chunks skipped) */
-  route: "wiki" | "chunks";
+  /** wiki_only = distilled pages answer alone; abstain = deterministic refusal */
+  route: ChatRouteValue;
+  /** which boundary check decided the route */
+  reason?: string;
   score: number;
   wiki_slugs: string[];
 }
@@ -224,7 +232,7 @@ export interface ChatDoneEvent {
   message_id: string;
   conversation_id: string;
   citations: Citation[];
-  route?: "wiki" | "chunks";
+  route?: ChatRouteValue;
   wiki_slugs?: string[];
 }
 

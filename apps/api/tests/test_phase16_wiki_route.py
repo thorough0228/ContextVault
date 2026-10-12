@@ -14,9 +14,10 @@ import json
 from typing import Any, Dict, List
 
 import pytest
+from sqlalchemy import select
 
 from app.config import get_settings
-from app.models import WikiPage
+from app.models import Document, WikiPage
 from app.services import search_service, wiki_service
 
 pytestmark = pytest.mark.offline
@@ -48,6 +49,14 @@ async def _setup_rag_with_page(
     assert up.status_code == 201, up.text
     doc_id = up.json()["id"]
 
+    # the router live-validates provenance — the seeded page must cite
+    # the document's REAL content hash or it degrades to WIKI_PLUS_RAG
+    real_hash = (
+        await db_session.execute(
+            select(Document.content_hash).where(Document.id == doc_id)
+        )
+    ).scalar()
+
     db_session.add(
         WikiPage(
             id=f"wp-{rid[:8]}",
@@ -59,7 +68,7 @@ async def _setup_rag_with_page(
             source_refs=[
                 {
                     "document_id": doc_id,
-                    "content_hash": "deadbeef",
+                    "content_hash": real_hash,
                     "filename": "alpha.txt",
                 }
             ],
@@ -67,7 +76,8 @@ async def _setup_rag_with_page(
         )
     )
     await db_session.commit()
-    return {"headers": headers, "rag_id": rid, "doc_id": doc_id}
+    return {"headers": headers, "rag_id": rid, "doc_id": doc_id,
+            "content_hash": real_hash}
 
 
 async def _chat_events(client_with_db, headers, rag_id, message) -> List[Dict[str, Any]]:
@@ -126,7 +136,7 @@ async def test_wiki_hit_skips_chunk_retrieval(
     types = [e["type"] for e in events]
 
     route_ev = next(e for e in events if e["type"] == "route")
-    assert route_ev["route"] == "wiki"
+    assert route_ev["route"] == "wiki_only"
     assert route_ev["score"] >= 0.3
     assert route_ev["wiki_slugs"] == ["alpha-txt"]
 
@@ -143,11 +153,11 @@ async def test_wiki_hit_skips_chunk_retrieval(
     assert c["filename"] == "alpha.txt"
     assert c["page_number"] == 0
     assert c["metadata"]["source"] == "wiki"
-    assert c["metadata"]["content_hash"] == "deadbeef"
+    assert c["metadata"]["content_hash"] == env["content_hash"]
     assert 0.0 <= c["retrieval_score"] <= 1.0
 
     done = next(e for e in events if e["type"] == "done")
-    assert done["route"] == "wiki"
+    assert done["route"] == "wiki_only"
     assert done["wiki_slugs"] == ["alpha-txt"]
 
     # the whole point of the route: search never ran
@@ -168,13 +178,13 @@ async def test_wiki_miss_falls_back_to_chunks(
     )
 
     route_ev = next(e for e in events if e["type"] == "route")
-    assert route_ev["route"] == "chunks"
+    assert route_ev["route"] == "rag_only"
     # below the routing threshold — the hash LLM's own pages may share
     # a stopword or two with the query, so assert "below threshold",
     # not exactly zero
     assert route_ev["score"] < 0.3
     done = next(e for e in events if e["type"] == "done")
-    assert done["route"] == "chunks"
+    assert done["route"] == "rag_only"
     assert calls, "fallback must call the regular search"
 
 
@@ -192,7 +202,7 @@ async def test_route_disabled_keeps_legacy_behaviour(
     )
 
     route_ev = next(e for e in events if e["type"] == "route")
-    assert route_ev["route"] == "chunks"
+    assert route_ev["route"] == "rag_only"
     assert calls, "legacy behaviour must search chunks"
 
 
@@ -210,7 +220,7 @@ async def test_threshold_boundary_forces_fallback(
         client_with_db, env["headers"], env["rag_id"], HIT_QUERY
     )
     route_ev = next(e for e in events if e["type"] == "route")
-    assert route_ev["route"] == "chunks"
+    assert route_ev["route"] == "rag_only"
     assert calls
 
 
@@ -227,7 +237,7 @@ async def test_stale_pages_never_route(
         client_with_db, env["headers"], env["rag_id"], HIT_QUERY
     )
     route_ev = next(e for e in events if e["type"] == "route")
-    assert route_ev["route"] == "chunks"
+    assert route_ev["route"] == "rag_only"
     assert calls
 
 
@@ -244,7 +254,7 @@ async def test_no_context_refusal_path_intact(
     events = await _chat_events(
         client_with_db, env["headers"], env["rag_id"], MISS_QUERY
     )
-    assert next(e for e in events if e["type"] == "route")["route"] == "chunks"
+    assert next(e for e in events if e["type"] == "route")["route"] == "rag_only"
     done = next(e for e in events if e["type"] == "done")
     assert done["message_id"]
 
@@ -273,8 +283,8 @@ async def test_route_and_token_metrics_recorded(
         )
 
         out = render()
-        assert 'chat_route_total{route="wiki"} 1' in out
-        assert 'chat_route_total{route="chunks"} 1' in out
+        assert 'chat_route_total{route="wiki_only"} 1' in out
+        assert 'chat_route_total{route="rag_only"} 1' in out
         assert 'llm_tokens_estimated_total{kind="prompt"}' in out
         assert 'llm_tokens_estimated_total{kind="completion"}' in out
         assert "chat_search_seconds_count" in out  # only the fallback searched

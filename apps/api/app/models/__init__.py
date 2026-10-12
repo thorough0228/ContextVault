@@ -487,6 +487,10 @@ class WikiPage(Base):
     # Phase 17 maintenance findings (contradiction scan output), None
     # when the page carries no findings.
     notes: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Phase 18 page boundary profile declared by the summary LLM:
+    # {"status", "version", "covers", "does_not_cover", "generated_at"}.
+    # Routing hints only — never treated as guarantees.
+    meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

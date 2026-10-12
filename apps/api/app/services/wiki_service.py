@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from sqlalchemy import select
@@ -51,9 +53,44 @@ questions. Drop filler. Use these markdown sections exactly:
 ## Open Questions
 - (or "None")
 
+Then, as the LAST thing in your answer, append one fenced block
+describing this page's boundary (machine-read; be honest about limits):
+
+```wiki-meta
+{{"covers": ["<topics this page fully answers, 2-5 short tags>"], "does_not_cover": ["<nearby questions this page can NOT answer: dropped details, exceptions, exact wording, tables>"]}}
+```
+
 Document (filename: {filename}):
 {body}
 """
+
+_WIKI_META_FENCE = re.compile(r"```wiki-meta\s*(.*?)\s*```", re.DOTALL)
+
+
+def _split_meta_block(content: str) -> tuple[str, Optional[dict]]:
+    """Strip the trailing wiki-meta fence; return (clean_content, meta).
+
+    The fence is removed even when its JSON is malformed (a garbage
+    block must never reach the prompt), but only parsed meta counts as
+    a boundary declaration.
+    """
+
+    match = _WIKI_META_FENCE.search(content)
+    if match is None:
+        return content.strip(), None
+    clean = (content[: match.start()] + content[match.end() :]).strip()
+    try:
+        data = json.loads(match.group(1))
+    except ValueError:
+        return clean, None
+    meta: dict = {}
+    for key in ("covers", "does_not_cover"):
+        value = data.get(key)
+        if isinstance(value, list):
+            tags = [str(item).strip() for item in value if str(item).strip()]
+            if tags:
+                meta[key] = tags[:8]
+    return clean, (meta or None)
 
 _MAX_BODY_CHARS = 12000
 
@@ -141,6 +178,13 @@ async def generate_doc_summary_page(
         logger.warning("wiki.summary.empty document_id=%s", doc.id)
         return None
 
+    # Phase 18 boundary profile: strip the wiki-meta fence the prompt
+    # asked for, keep it as structured meta (routing hints only).
+    content, boundary = _split_meta_block(content)
+    if not content:
+        logger.warning("wiki.summary.empty document_id=%s", doc.id)
+        return None
+
     slug = _summary_slug(doc.filename)
     source_refs = [
         {
@@ -159,10 +203,22 @@ async def generate_doc_summary_page(
     )
     existing = page.first()
     if existing is not None:
+        version = int((existing.meta or {}).get("version") or 0) + 1
+    else:
+        version = 1
+    meta = {
+        "version": version,
+        "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+    if boundary:
+        meta.update(boundary)
+
+    if existing is not None:
         existing.title = f"Summary: {doc.filename}"
         existing.content = content
         existing.source_refs = source_refs
         existing.stale = False
+        existing.meta = meta
         page_obj = existing
     else:
         page_obj = WikiPage(
@@ -174,11 +230,13 @@ async def generate_doc_summary_page(
             content=content,
             source_refs=source_refs,
             stale=False,
+            meta=meta,
         )
         db.add(page_obj)
     await db.flush()
     logger.info(
-        "wiki.summary.upserted document_id=%s slug=%s", doc.id, slug
+        "wiki.summary.upserted document_id=%s slug=%s version=%d",
+        doc.id, slug, version,
     )
     return page_obj
 
@@ -291,7 +349,7 @@ async def wiki_context_for_query(
     ``{"slug", "title", "content", "source_refs", "notes", "score"}``
     dicts (may be empty)."""
 
-    from app.services.tokenization import tokenize
+    from app.services.tokenization import content_tokens, tokenize
     from app.services import wiki_cache
 
     q_tokens = set(tokenize(query))
@@ -299,19 +357,31 @@ async def wiki_context_for_query(
         return []
     pages = await wiki_cache.load_pages(db, rag_id=rag_id)
     scored: List[dict] = []
+    q_content = content_tokens(query)
     for page in pages:
         doc_tokens = set(tokenize(page["title"] + "\n" + page["content"]))
-        overlap = len(q_tokens & doc_tokens)
+        if q_content:
+            # Phase 18: score on content tokens only — an out-of-kb
+            # question must not ride "who is the" into a wiki-only route
+            doc_content = content_tokens(page["title"] + "\n" + page["content"])
+            overlap = len(q_content & doc_content)
+            denom = len(q_content)
+        else:
+            overlap = len(q_tokens & doc_tokens)
+            denom = len(q_tokens)
         if overlap == 0:
             continue
         scored.append(
             {
                 "slug": page["slug"],
+                "kind": page.get("kind"),
                 "title": page["title"],
                 "content": page["content"],
                 "source_refs": page.get("source_refs") or [],
                 "notes": page.get("notes"),
-                "score": overlap / len(q_tokens),
+                "meta": page.get("meta"),
+                "overlap": overlap,
+                "score": overlap / denom,
             }
         )
     scored.sort(key=lambda h: h["score"], reverse=True)
