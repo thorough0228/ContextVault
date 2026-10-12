@@ -198,9 +198,10 @@ Golden 评测(230 查询):hybrid hit@5=0.965 vs vector 0.896 vs
 
 **切块策略可配**(`CHUNKER_TYPE`,Phase 14):`fixed`(500/100 滑窗,原行为)/
 `recursive`(段落→句边界递归切分)/`semantic`(embedding 断点检测,API 失败
-自动降级 recursive)。Golden 矩阵实测:rerank 精排使切块策略对 overall
-敏感度大幅下降(hybrid 下 fixed 0.939 vs recursive 0.883),生产定稿
-**fixed 切块 + hybrid 检索**;扫描件/复杂版面 PDF 建议走 MinerU 预处理(见 5d)。
+自动降级 recursive)。切块策略矩阵已全部实测(见 evals/README):
+fixed+hybrid **0.939** / recursive 0.883 / semantic 0.796(overall hit@5),
+**生产定稿 fixed 切块 + hybrid 检索**;扫描件/复杂版面 PDF 建议走 MinerU
+预处理(见 5d)。
 
 ### 5c. 文档更新(hash 感知 + 灰度双版本,Phase 13)
 

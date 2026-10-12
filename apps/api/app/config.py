@@ -104,13 +104,25 @@ class Settings(BaseSettings):
     # Allowed upload MIME types / extensions. Kept narrow on purpose:
     # only what the parsers actually understand.
     allowed_file_types: List[str] = Field(
-        default_factory=lambda: ["pdf", "txt", "csv", "json", "jsonl"]
+        default_factory=lambda: ["pdf", "txt", "csv", "json", "jsonl", "md"]
     )
+    # PDF text-extraction engine: "auto" tries mineru → unstructured →
+    # pymupdf in priority order; explicit values pin one engine. mineru
+    # runs as an external CLI subprocess (model stays out of this
+    # process) and degrades gracefully when not installed.
+    pdf_parser: str = "auto"
+    pdf_parser_timeout_seconds: float = 600.0
 
     # Chunker knobs — read by the worker at task-time so changes here
     # take effect without redeploying the API.
     chunk_size_chars: int = 1500
     chunk_overlap_chars: int = 200
+    # fixed = original sliding window; recursive = boundary-aware rules;
+    # semantic = embedding breakpoints (falls back to recursive on API
+    # failure). Changing this requires re-ingesting existing documents.
+    chunker_type: str = "fixed"
+    chunker_semantic_percentile: float = 95.0
+    chunker_semantic_min_chars: int = 100
 
     # Object storage (MinIO / S3). The API uses these for upload
     # (`PUT object`) and the worker uses them for download.

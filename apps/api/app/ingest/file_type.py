@@ -80,6 +80,15 @@ def detect_file_type(
             ) from exc
         return "txt"
 
+    if ext in {"md", "markdown"}:
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise FileTypeError(
+                f"file has .{ext} extension but is not valid UTF-8: {exc}"
+            ) from exc
+        return "md"
+
     if ext in {"csv", "json", "jsonl"}:
         # utf-8-sig strips a leading BOM (Excel-exported CSVs carry one).
         try:
@@ -92,7 +101,7 @@ def detect_file_type(
 
     raise FileTypeError(
         f"unsupported file type (extension={ext!r}); "
-        "only .pdf, .txt, .csv, .json and .jsonl are accepted"
+        "only .pdf, .txt, .csv, .json, .jsonl and .md are accepted"
     )
 
 

@@ -37,6 +37,11 @@ os.environ.setdefault("LLM_MODEL", "hash-llm")
 # extraction calls the LLM provider after each turn.
 os.environ.setdefault("MEMORY_EXTRACTION_ENABLED", "0")
 os.environ.setdefault("MEMORY_INJECTION_ENABLED", "0")
+# Phase 15: keep PDF parsing deterministic in tests — the mineru CLI
+# (auto chain) shells out and can take minutes per document.
+os.environ.setdefault("PDF_PARSER", "pymupdf")
+os.environ.setdefault("PDF_PARSER_TIMEOUT_SECONDS", "120")
+os.environ.setdefault("MEMORY_INJECTION_ENABLED", "0")
 
 import httpx
 import pytest

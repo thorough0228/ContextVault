@@ -12,6 +12,7 @@ import io
 import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -43,11 +44,60 @@ class ParsedPage:
 
 
 def parse_pdf(stream: io.BufferedIOBase) -> List[ParsedPage]:
-    """Extract text from a PDF stream.
+    """Extract text from a PDF stream, honouring ``PDF_PARSER``.
 
-    Uses PyMuPDF (``fitz``). Pages without extractable text yield an
-    empty string — that's normal for image-only scans.
+    * ``auto`` (default) — try the mineru CLI (highest-quality layout/
+      table/OCR extraction), then unstructured, then PyMuPDF.
+    * ``mineru`` / ``unstructured`` / ``pymupdf`` — pin one engine
+      (missing dependencies degrade to the next in the auto chain).
     """
+
+    settings = None
+    try:
+        from app.config import get_settings
+
+        settings = get_settings()
+    except Exception:  # noqa: BLE001 — standalone usage without config
+        pass
+    order = _pdf_engine_order(
+        settings.pdf_parser if settings else "auto",
+    )
+    errors: List[str] = []
+    for engine in order:
+        try:
+            if engine == "mineru":
+                pages = _parse_pdf_mineru(
+                    stream,
+                    timeout_s=(
+                        settings.pdf_parser_timeout_seconds
+                        if settings
+                        else 600.0
+                    ),
+                )
+            elif engine == "unstructured":
+                pages = _parse_pdf_unstructured(stream)
+            else:
+                pages = _parse_pdf_pymupdf(stream)
+            logger.info("parser.pdf.ok engine=%s pages=%d", engine, len(pages))
+            return pages
+        except Exception as exc:  # noqa: BLE001 — degrade to next engine
+            errors.append(f"{engine}: {str(exc)[:120]}")
+            logger.warning(
+                "parser.pdf.engine_failed engine=%s err=%s", engine, str(exc)[:120]
+            )
+    raise ValueError("all PDF parsers failed — " + " | ".join(errors))
+
+
+def _pdf_engine_order(configured: str) -> List[str]:
+    if configured == "auto":
+        return ["mineru", "unstructured", "pymupdf"]
+    return [configured]
+
+
+def _parse_pdf_pymupdf(stream: io.BufferedIOBase) -> List[ParsedPage]:
+    """Original engine: PyMuPDF text-layer extraction. Pages without
+    extractable text yield an empty string — normal for scans."""
+
     import fitz  # local so tests that skip parsers don't pay the cost
 
     doc = fitz.open(stream=stream)
@@ -56,10 +106,122 @@ def parse_pdf(stream: io.BufferedIOBase) -> List[ParsedPage]:
         for i, page in enumerate(doc, start=1):
             text = page.get_text("text") or ""
             pages.append(ParsedPage(page_number=i, text=text))
-        logger.info("parser.pdf.ok pages=%d", len(pages))
         return pages
     finally:
         doc.close()
+
+
+def _parse_pdf_mineru(
+    stream: io.BufferedIOBase, *, timeout_s: float = 600.0
+) -> List[ParsedPage]:
+    """Engine 1: the mineru CLI as an isolated subprocess.
+
+    The layout model never loads inside this process (it would bloat
+    the worker and fight for GPU memory). Writes the stream to a temp
+    .pdf, runs ``mineru -p ... -o ...``, then converts the produced
+    markdown (tables arrive as inline HTML — cleaned by
+    ``mineru_to_markdown.clean_mineru_markdown``) into virtual pages
+    split at markdown H1/H2 headings.
+    """
+
+    import subprocess
+    import tempfile
+
+    from app.ingest.mineru_convert import clean_mineru_markdown
+
+    data = stream.read()
+
+    with tempfile.TemporaryDirectory(prefix="cv-mineru-") as tmp:
+        tmp_dir = Path(tmp)
+        pdf_path = tmp_dir / "input.pdf"
+        pdf_path.write_bytes(data)
+        out_dir = tmp_dir / "out"
+
+        import os as _os
+
+        source = _os.environ.get("MINERU_SOURCE", "modelscope")
+        import sys
+
+        exe = Path(sys.executable).parent / "Scripts" / "mineru.exe"
+        if not exe.exists():  # posix venv/bin layout
+            exe = Path(sys.executable).parent / "mineru"
+        out_md = tmp_dir / "out.md"
+        result = subprocess.run(
+            [str(exe), "parse", str(pdf_path),
+             "--tier", "flash", "--format", "markdown",
+             "-o", str(out_md), "--wait", "300"],
+            capture_output=True,
+            timeout=timeout_s,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"mineru exited {result.returncode}: "
+                f"{result.stderr.decode('utf-8', 'ignore')[:200]}"
+            )
+        if not out_md.exists():
+            raise RuntimeError("mineru produced no markdown output")
+        clean = clean_mineru_markdown(out_md.read_text(encoding="utf-8"))
+
+    return _markdown_to_pages(clean)
+
+
+def _parse_pdf_unstructured(stream: io.BufferedIOBase) -> List[ParsedPage]:
+    """Engine 2: unstructured.partition_pdf (optional dependency)."""
+
+    from unstructured.partition.pdf import partition_pdf
+
+    stream.seek(0)
+    elements = partition_pdf(file=stream)
+    by_page: dict[int, List[str]] = {}
+    for el in elements:
+        page = int(getattr(el.metadata, "page_number", 1) or 1)
+        text = str(el).strip()
+        if text:
+            by_page.setdefault(page, []).append(text)
+    pages = [
+        ParsedPage(page_number=p, text="\n\n".join(parts))
+        for p, parts in sorted(by_page.items())
+    ]
+    if not pages:
+        raise RuntimeError("unstructured produced no text")
+    return pages
+
+
+def _markdown_to_pages(md_text: str) -> List[ParsedPage]:
+    """Split cleaned markdown into virtual pages at H1/H2 headings
+    (each chapter becomes one page; no headings → single page)."""
+
+    lines = md_text.splitlines()
+    pages: List[ParsedPage] = []
+    current: List[str] = []
+    start = 1
+
+    def flush():
+        text = "\n".join(current).strip()
+        if text:
+            pages.append(ParsedPage(page_number=len(pages) + 1, text=text))
+
+    for line in lines:
+        if line.startswith("# ") or line.startswith("## "):
+            flush()
+            current = [line]
+            start = 1
+        else:
+            current.append(line)
+    flush()
+
+    if not pages:
+        pages.append(ParsedPage(page_number=1, text=md_text.strip()))
+    return pages
+
+
+def parse_markdown(stream: io.BufferedIOBase) -> List[ParsedPage]:
+    """Parse a markdown document (e.g. MinerU output already cleaned by
+    ``scripts/mineru_to_markdown.py``). Splits at H1/H2 headings."""
+
+    raw = stream.read()
+    text = raw.decode("utf-8-sig") if isinstance(raw, bytes) else str(raw)
+    return _markdown_to_pages(text)
 
 
 def parse_txt(stream: io.BufferedIOBase) -> List[ParsedPage]:
@@ -85,6 +247,8 @@ def parse_document(*, file_type: str, stream: io.BufferedIOBase) -> List[ParsedP
         return parse_csv(stream)
     if file_type == "json":
         return parse_json(stream)
+    if file_type == "md":
+        return parse_markdown(stream)
     raise ValueError(f"unsupported file_type: {file_type!r}")
 
 

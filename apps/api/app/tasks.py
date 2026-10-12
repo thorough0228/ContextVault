@@ -296,13 +296,39 @@ def _process_document_impl(self, document_id: str, on_ready_supersede: str | Non
             return
 
         try:
-            chunks = chunk_pages(
-                pages,
-                document_id=document_id,
-                rag_id=doc.rag_id,
-                size=settings.chunk_size_chars,
-                overlap=settings.chunk_overlap_chars,
-            )
+            if settings.chunker_type == "semantic":
+                from app.ingest.semantic_chunker import SemanticChunker
+
+                chunker = SemanticChunker(
+                    size=settings.chunk_size_chars,
+                    overlap=settings.chunk_overlap_chars,
+                    percentile=settings.chunker_semantic_percentile,
+                    min_chars=settings.chunker_semantic_min_chars,
+                )
+            elif settings.chunker_type == "recursive":
+                from app.ingest.chunker import RecursiveChunker
+
+                chunker = RecursiveChunker(
+                    size=settings.chunk_size_chars,
+                    overlap=settings.chunk_overlap_chars,
+                )
+            else:
+                from app.ingest.chunker import chunk_pages as _fixed_chunk
+
+                chunks = _fixed_chunk(
+                    pages,
+                    document_id=document_id,
+                    rag_id=doc.rag_id,
+                    size=settings.chunk_size_chars,
+                    overlap=settings.chunk_overlap_chars,
+                )
+                chunker = None
+            if chunker is not None:
+                chunks = chunker.chunk_pages(
+                    pages,
+                    document_id=document_id,
+                    rag_id=doc.rag_id,
+                )
         except Exception as exc:  # noqa: BLE001
             if _transient(exc):
                 raise self.retry(exc=exc, countdown=2 ** self.request.retries)

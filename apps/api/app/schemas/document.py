@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 DocumentStatusLiteral = Literal["CREATED", "PROCESSING", "READY", "FAILED"]
-DocumentFileTypeLiteral = Literal["pdf", "txt", "csv", "json", "jsonl"]
+DocumentFileTypeLiteral = Literal["pdf", "txt", "csv", "json", "jsonl", "md"]
 
 
 class DocumentResponse(BaseModel):

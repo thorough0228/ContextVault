@@ -134,3 +134,66 @@ def chunk_pages(
     return FixedWindowChunker(size=size, overlap=overlap).chunk_pages(
         pages, document_id=document_id, rag_id=rag_id
     )
+
+
+class RecursiveChunker:
+    """Phase 14: boundary-aware chunking (plan 2).
+
+    Splits at the most natural boundary (paragraph → line → sentence →
+    space) instead of a blind sliding window, then merges pieces up to
+    ``size`` with ``overlap`` carried into the next chunk. Chunks keep
+    the same ``char_start`` / ``char_end`` metadata contract as
+    :class:`FixedWindowChunker`, so record alignment in the eval
+    harness keeps working.
+    """
+
+    def __init__(self, *, size: int, overlap: int) -> None:
+        if size <= 0:
+            raise ValueError("size must be > 0")
+        if overlap < 0:
+            raise ValueError("overlap must be >= 0")
+        self.size = size
+        self.overlap = overlap
+
+    def chunk_pages(
+        self,
+        pages: Iterable[ParsedPage],
+        *,
+        document_id: str,
+        rag_id: str,
+    ) -> List[Chunk]:
+        from app.ingest.recursive_splitter import recursive_split
+
+        chunks: List[Chunk] = []
+        idx = 0
+        for page in pages:
+            text = page.text
+            if not text or not text.strip():
+                continue
+            for start, end, piece in recursive_split(
+                text, size=self.size, overlap=self.overlap
+            ):
+                if not piece.strip():
+                    continue
+                chunks.append(
+                    Chunk(
+                        text=piece,
+                        document_id=document_id,
+                        rag_id=rag_id,
+                        page_number=page.page_number,
+                        chunk_index=idx,
+                        metadata={
+                            "char_start": start,
+                            "char_end": end,
+                            "chunk_size": self.size,
+                            "chunk_overlap": self.overlap,
+                            "chunker": "recursive",
+                        },
+                    )
+                )
+                idx += 1
+        logger.info(
+            "chunker.recursive.ok document_id=%s chunks=%d size=%d overlap=%d",
+            document_id, len(chunks), self.size, self.overlap,
+        )
+        return chunks
