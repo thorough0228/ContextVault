@@ -230,10 +230,16 @@ def process_document(self, document_id: str, on_ready_supersede: str | None = No
     )
     rid_token = _set_rid(inbound_rid) if inbound_rid else None
     try:
-        return _process_document_impl(self, document_id, on_ready_supersede)
+        result = _process_document_impl(self, document_id, on_ready_supersede)
     finally:
         if rid_token is not None:
             _reset_rid(rid_token)
+    # Phase 15 wiki: after the ingestion transaction has committed,
+    # enqueue summary-page generation (eager mode runs it in-process;
+    # a real worker runs it as an isolated task).
+    if result.get("status") == "READY":
+        _enqueue_wiki_generation(document_id)
+    return result
 
 
 def _process_document_impl(self, document_id: str, on_ready_supersede: str | None = None) -> dict:
@@ -440,6 +446,7 @@ def _process_document_impl(self, document_id: str, on_ready_supersede: str | Non
                     on_ready_supersede,
                 )
 
+    result = {"document_id": document_id, "status": "READY"}
     try:
         _call_async(_run_with_session(document_id, _do))
     except Exception as exc:  # noqa: BLE001
@@ -481,6 +488,28 @@ def _process_document_impl(self, document_id: str, on_ready_supersede: str | Non
         "status": "READY",
         "finished_at": datetime.now(tz=timezone.utc).isoformat(),
     }
+
+
+def _enqueue_wiki_generation(document_id: str) -> None:
+    """Phase 15 wiki: generate the document's summary wiki page.
+    Called AFTER the ingestion transaction has committed (an eager
+    task opening a second SQLite session would hit 'database is
+    locked' otherwise). Failures are logged and swallowed."""
+
+    from app.celery_client import celery_app
+    from app.config import get_settings
+
+    try:
+        celery_app.send_task(
+            "app.tasks.generate_wiki",
+            kwargs={"document_id": document_id},
+            queue=get_settings().celery_default_queue,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "wiki.generate.enqueue_failed document_id=%s err=%s",
+            document_id, str(exc)[:120],
+        )
 
 @shared_task(
     name="app.tasks.extract_memory",
@@ -595,3 +624,62 @@ def _parse_fact_array(raw: str) -> List[str]:
     if not isinstance(data, list):
         return []
     return [str(x) for x in data if str(x).strip()]
+
+
+@shared_task(
+    name="app.tasks.generate_wiki",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+    acks_late=True,
+)
+def generate_wiki(self, document_id: str) -> dict:
+    """Phase 15 wiki layer: generate the doc_summary wiki page for one
+    READY document, then rebuild the RAG's index page. LLM failures
+    are swallowed (the wiki is a derived layer — its absence degrades
+    gracefully; chunk RAG remains authoritative)."""
+
+    async def _do(session) -> dict:
+        from app.services import wiki_service
+
+        doc = await session.get(Document, document_id)
+        if doc is None or doc.status != "READY":
+            return {"document_id": document_id, "wiki": "skipped"}
+        llm = wiki_service._wiki_llm()
+        page = await wiki_service.generate_doc_summary_page(
+            session, doc=doc, llm=llm
+        )
+        await wiki_service.rebuild_index_page(session, rag_id=doc.rag_id)
+        return {"document_id": document_id, "wiki_page": page.slug if page else None}
+
+    try:
+        _call_async(_run_with_session(document_id, _do))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "wiki.generate.failed document_id=%s err=%s",
+            document_id, str(exc)[:160],
+        )
+        raise self.retry(exc=exc)
+    return {"document_id": document_id}
+
+
+@shared_task(name="app.tasks.mark_wiki_stale", bind=True, acks_late=True)
+def mark_wiki_stale(self, document_id: str) -> dict:
+    """Phase 15: mark derived wiki pages stale when their source
+    document's content changed (update / bluegreen switch)."""
+
+    async def _do(session) -> dict:
+        from app.services import wiki_service
+
+        marked = await wiki_service.mark_stale_for_document(
+            session, document_id=document_id
+        )
+        return {"document_id": document_id, "marked": marked}
+
+    try:
+        _call_async(_run_with_session(document_id, _do))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "wiki.stale.failed document_id=%s err=%s", document_id, str(exc)[:160]
+        )
+    return {"document_id": document_id}

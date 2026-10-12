@@ -206,6 +206,12 @@ class Settings(BaseSettings):
     memory_injection_enabled: bool = True
     memory_top_k: int = 20
     memory_extract_max_facts: int = 5
+    # Wiki layer (Phase 15): LLM used for summary-page generation.
+    # Empty = the main LLM (llm_provider). Non-empty = an OpenAI-
+    # compatible model served at embedding_openai_base_url with the
+    # embedding API key (e.g. SiliconFlow "Qwen/Qwen2.5-32B-Instruct")
+    # — useful when the main LLM account is separate/out of credit.
+    wiki_llm_model: str = ""
 
     # ---- LLM (Phase 5) ----
     # All values come from .env / environment. The default provider

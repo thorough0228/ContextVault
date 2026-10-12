@@ -347,6 +347,13 @@ async def update_document_content(
             "this document was superseded by a newer version and is "
             "hidden from retrieval — update the replacement instead"
         )
+
+    # bluegreen switch: the new document superseded this one — mark
+    # derived wiki pages stale (their provenance points at the old
+    # content state).
+    from app.services import wiki_service
+
+    await wiki_service.mark_stale_for_document(db, document_id=doc.id)
     if strategy not in ("replace", "bluegreen"):
         raise BadRequestError(
             f"unknown update strategy {strategy!r} (replace|bluegreen)"
@@ -378,6 +385,10 @@ async def update_document_content(
         doc.status = "PROCESSING"
         doc.error_message = None
         await db.commit()
+        # Phase 15: derived wiki pages for this document are now stale.
+        from app.services import wiki_service
+
+        await wiki_service.mark_stale_for_document(db, document_id=doc.id)
         if old_key and old_key != new_key:
             try:
                 storage.delete(key=old_key)
@@ -386,15 +397,9 @@ async def update_document_content(
                     "document.update.old_object_delete_failed key=%s err=%s",
                     old_key, str(exc)[:120],
                 )
-        from app.celery_client import celery_app
-
-        celery_app.send_task(
-            "app.tasks.process_document",
-            kwargs={"document_id": doc.id},
-            queue=get_settings().celery_default_queue,
-        )
         logger.info(
-            "document.update.replace document_id=%s strategy=replace",
+            "document.update.replace document_id=%s strategy=replace "
+            "(reingest enqueued by router after commit)",
             doc.id,
         )
         return {
@@ -402,6 +407,7 @@ async def update_document_content(
             "strategy": "replace",
             "document_id": doc.id,
             "status": "PROCESSING",
+            "reingest": True,
         }
 
     # bluegreen: a NEW document row ingests independently; the old row
@@ -434,18 +440,10 @@ async def update_document_content(
         key=real_key, body=body, content_type="application/octet-stream"
     )
 
-    from app.celery_client import celery_app
-
-    celery_app.send_task(
-        "app.tasks.process_document",
-        kwargs={
-            "document_id": pre.id,
-            "on_ready_supersede": doc.id,
-        },
-        queue=get_settings().celery_default_queue,
-    )
     logger.info(
-        "document.update.bluegreen old=%s new=%s", doc.id, pre.id
+        "document.update.bluegreen old=%s new=%s "
+        "(reingest enqueued by router after commit)",
+        doc.id, pre.id,
     )
     return {
         "updated": True,
@@ -453,6 +451,9 @@ async def update_document_content(
         "document_id": doc.id,
         "new_document_id": pre.id,
         "status": "PROCESSING",
+        "reingest": True,
+        "reingest_document_id": pre.id,
+        "on_ready_supersede": doc.id,
     }
 
 

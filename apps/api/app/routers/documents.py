@@ -333,10 +333,37 @@ async def update_document_content(
     )
     body.close()
     from fastapi.responses import JSONResponse
+    from app.celery_client import celery_app
 
     if not result.get("updated"):
         # 200 — idempotent no-op (decorator default is 202)
         return JSONResponse(status_code=200, content=result)
+    # Commit the update transaction BEFORE enqueueing the re-ingest:
+    # an eager Celery task opening a second session while this request
+    # still holds the SQLite write lock deadlocks (database is locked).
+    await db.commit()
+    try:
+        celery_app.send_task(
+            "app.tasks.process_document",
+            kwargs={
+                "document_id": document_id,
+                **(
+                    {
+                        "document_id": result["reingest_document_id"],
+                        "on_ready_supersede": document_id,
+                    }
+                    if result.get("strategy") == "bluegreen"
+                    else {}
+                ),
+            },
+            queue=settings.celery_default_queue,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "documents.update.enqueue_failed document_id=%s err=%s",
+            document_id, exc,
+        )
+        # Update is committed; a future retry path can re-enqueue.
     return JSONResponse(status_code=202, content=result)
 
 

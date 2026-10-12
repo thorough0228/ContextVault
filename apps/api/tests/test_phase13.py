@@ -111,6 +111,7 @@ async def test_put_replace_reingests_new_content(
     assert body["strategy"] == "replace"
 
     # eager worker: new chunks replaced old ones under the SAME doc id
+    await db_session.rollback()  # drop stale read snapshot
     rows = (
         await db_session.execute(
             select(DocumentChunk.chunk_text).where(

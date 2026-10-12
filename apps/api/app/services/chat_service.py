@@ -45,7 +45,7 @@ from app.schemas.chat import (
     ChatEventError,
     ChatEventToken,
 )
-from app.services import rag_service, search_service
+from app.services import rag_service, search_service, wiki_service
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +104,7 @@ def _build_prompt_messages(
     user_message: str,
     conversation_summary: str | None = None,
     memories: Sequence[str] | None = None,
+    wiki_pages: Sequence[dict] | None = None,
 ) -> List[dict]:
     """Assemble the OpenAI-style messages list for the LLM.
 
@@ -149,6 +150,19 @@ def _build_prompt_messages(
                 "Summary of the earlier part of this conversation "
                 "(before the messages below):\n"
                 + conversation_summary
+            ),
+        })
+    if wiki_pages:
+        wiki_block = "\n\n".join(
+            f"### {w['title']}\n{w['content']}" for w in wiki_pages
+        )
+        messages.append({
+            "role": "system",
+            "content": (
+                "Compiled knowledge-base digest (wiki pages distilled by "
+                "the system from the raw corpus — use as background; cite "
+                "the underlying [n] sources when specifics matter):\n\n"
+                + wiki_block
             ),
         })
     for m in recent:
@@ -391,6 +405,17 @@ async def stream_chat_turn(
     # 5. Citation event
     yield _event(ChatEventCitation(citations=citations))
 
+    # 5b. Phase 15 wiki layer: non-stale wiki pages matching the query
+    # become an additional distilled context block (the compiled
+    # knowledge layer sits above raw chunks).
+    wiki_pages_list: List[dict] = []
+    try:
+        wiki_pages_list = await wiki_service.wiki_context_for_query(
+            db, rag_id=rag_id, query=user_message
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("chat.wiki_degraded err=%s", str(exc)[:120])
+
     # 6. Prompt + LLM stream
     context_block = _build_context_block(citations)
     messages = _build_prompt_messages(
@@ -400,6 +425,7 @@ async def stream_chat_turn(
         user_message=user_message,
         conversation_summary=conv.summary,
         memories=memories,
+        wiki_pages=wiki_pages_list,
     )
 
     full_text_parts: List[str] = []

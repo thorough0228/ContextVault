@@ -226,6 +226,29 @@ fixed+hybrid **0.939** / recursive 0.883 / semantic 0.796(overall hit@5),
 配套脚本 `scripts/mineru_to_markdown.py`:把 MinerU 输出目录清洗为纯
 markdown 后直接上传(.md 为受支持类型)。
 
+### 5e. Wiki 知识层(LLM 维护的持久摘要,Phase 15)
+
+Karpathy 式 LLM Wiki:在原始 chunk 检索(L3)之上加一层 LLM 生成、
+持久化在 `wiki_pages` 表的知识页(L2),chat 时 wiki 优先注入:
+
+- **doc_summary 页**:文档异步到达 READY 后,由 `app.tasks.generate_wiki`
+  调 LLM 把全文压缩成结构化摘要(Key Points / Key Data / Open Questions),
+  一文档一页,`source_refs` 记录 `{document_id, content_hash, filename}`
+  溯源前沿;幂等 upsert(同 slug 覆盖)
+- **index 页**:每 RAG 一页目录,从所有非 stale 的 doc_summary 重建
+  ("LLM 先读目录再答题")
+- **失效**:文档更新(replace/bluegreen)时按 content_hash 对比把引用页
+  标 `stale=true`;重新生成后自动复位。chat 检索(`wiki_context_for_query`,
+  词重叠打分)只取非 stale 页
+- **注入**:`_build_prompt_messages` 在 memories 之后、history 之前插入
+  "Compiled knowledge-base digest" 系统块
+
+配置 `WIKI_LLM_MODEL`:空 = 走主 LLM(`LLM_PROVIDER`);非空 = 用
+embedding 的 OpenAI 兼容端点 + key 跑指定模型(如硅基流动
+`Qwen/Qwen2.5-32B-Instruct`),主 LLM 欠费/不可用时 wiki 生成不受影响。
+LLM 失败静默降级(wiki 缺页不影响 chunk RAG 主链路),日志以
+`wiki.summary.llm_failed`(ERROR)暴露。
+
 ### 6. 三层安全边界
 
 每个用户级 endpoint 都经过三层校验(router → service → DB filter)。
@@ -573,6 +596,7 @@ cd apps/web && npm run typecheck && npm run build
 | 对象存储 | `S3_*`, `S3_BUCKET`, `MINIO_ROOT_*` |
 | Embedding | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSION` |
 | LLM | `LLM_PROVIDER`, `LLM_MODEL`, `LLM_OPENAI_API_KEY`, `LLM_MAX_CONTEXT_TOKENS` |
+| Wiki (Phase 15) | `WIKI_LLM_MODEL` |
 | 可观测性 | `LOG_FORMAT` (`plain` / `json`), `UPLOAD_MAX_BYTES` |
 
 `JWT_SECRET` / `POSTGRES_PASSWORD` / `S3_SECRET_KEY` 在任何非
