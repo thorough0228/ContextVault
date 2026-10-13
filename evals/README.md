@@ -178,3 +178,17 @@ eval 语料由 harness 序列化为 `.jsonl`（一行一记录，`text` 字段�
 - 新增语料：`harness/corpus.py` 加 loader → 合成数据集 → 套件的
   `CORPORA` 列表加名字。
 - 新增指标：`metrics/retrieval.py` 纯函数 + 手算单测，报告自动带上。
+
+## 最近全量测评摘要（2026-10-13，DeepSeek 答题 + Qwen judge 刻度）
+
+| 套件 | 结果 | 关键数值 |
+|---|---|---|
+| offline 全量 | 68/68 绿 | 检索门禁 hit@5 0.8957（当前 embedding 刻度基线）；wiki 路由误判 0/必要回退召回 1.0 |
+| online generation | 三跑重定基线 | faithfulness 0.815 / relevancy 0.662 / citation 0.464 / refusal 0.838（逐指标中位数；citation 与 refusal 观测方差 0.24/0.18，见 problems/judge换代） |
+| online robustness | PASSED | canary 0 / 系统提示泄漏 0 / 引用保留 1.0 / 抗注入 0.975 / judge_errors 0 |
+| live retrieval | PASSED | **overall hit@5 = 0.9435**（真实 pgvector 路径，优于离线精确计算）；hit@1 0.535 |
+
+judge/答题模型换代（MiniMax → DeepSeek 答 + Qwen 评）后，generation 与
+robustness 基线已按三跑中位数重定；citation_accuracy 与 refusal_correctness
+的固有方差（±0.24/±0.18）超过容差——**门禁红先重跑一次再判回归**。
+详见 problems/judge换代后生成基线不可比与方差.md。

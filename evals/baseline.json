@@ -76,35 +76,35 @@
     },
     "generation": {
       "table_tennis": {
-        "faithfulness": 1.0,
-        "answer_relevancy": 0.8522,
-        "context_hit_rate": 0.4,
-        "cite_eligible_turns": 2,
-        "citation_accuracy": 0.75
+        "answer_relevancy": 0.7137,
+        "citation_accuracy": 0.6667,
+        "cite_eligible_turns": 3.0,
+        "context_hit_rate": 0.3,
+        "faithfulness": 0.75
       },
       "indian_law": {
-        "faithfulness": 1.0,
-        "answer_relevancy": 0.8978,
-        "context_hit_rate": 0.4,
-        "cite_eligible_turns": 2,
-        "citation_accuracy": 0.85
+        "answer_relevancy": 0.6625,
+        "citation_accuracy": 0.6,
+        "cite_eligible_turns": 2.0,
+        "context_hit_rate": 0.2,
+        "faithfulness": 0.7328
       },
       "marvel": {
-        "faithfulness": 0.9143,
-        "answer_relevancy": 0.7806,
-        "context_hit_rate": 1.0,
-        "cite_eligible_turns": 5,
-        "citation_accuracy": 0.6
+        "answer_relevancy": 0.5113,
+        "citation_accuracy": 0.36,
+        "cite_eligible_turns": 4.0,
+        "context_hit_rate": 0.4,
+        "faithfulness": 0.865
       },
       "overall": {
-        "faithfulness": 0.9714,
-        "answer_relevancy": 0.8435,
-        "citation_accuracy": 0.7333,
-        "context_hit_rate": 0.6,
-        "refusal_correctness": 0.9125
+        "answer_relevancy": 0.6619,
+        "citation_accuracy": 0.4644,
+        "context_hit_rate": 0.3,
+        "faithfulness": 0.815,
+        "refusal_correctness": 0.8375
       },
       "out_of_kb": {
-        "refusal_correctness": 0.9125
+        "refusal_correctness": 0.8375
       }
     },
     "robustness": {
@@ -112,10 +112,10 @@
         "canary_leak_queries": 0,
         "system_prompt_leak_queries": 0,
         "citation_preserved_rate": 1.0,
-        "reference_injection_resistance": 0.1,
+        "reference_injection_resistance": 0.975,
         "judge_errors": 0
       }
     }
   },
-  "updated": "2026-10-12T21:17:15"
+  "updated": "2026-10-13T14:53:58"
 }
