@@ -53,6 +53,11 @@ os.environ.setdefault("WIKI_ROUTE_ENABLED", "false")
 # Phase 17: the wiki hot cache must never reach for a real Redis from
 # inside tests — cache tests opt in with a stub backend.
 os.environ.setdefault("WIKI_CACHE_ENABLED", "0")
+# Phase 19: QA-note absorption spawns eager tasks with their own
+# engine connections mid-chat — pin off outside the absorb tests
+# (a developer .env flip would otherwise poison SQLite locking and
+# prompt assertions everywhere).
+os.environ.setdefault("WIKI_ABSORB_ENABLED", "0")
 
 import httpx
 import pytest

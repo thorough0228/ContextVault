@@ -1,24 +1,15 @@
-"""Wiki boundary router suite (Phase 18) — informational, NOT gated.
+"""Wiki boundary router suite (Phase 18/19) — informational, NOT gated.
 
-Scores the four-way router against hand-labelled queries over the
-marvel corpus (real LLM-summarised wiki page, hash embeddings — the
-router never touches vectors):
-
-* ``route_accuracy``          — exact match between the router and the
-  ``expected`` label;
-* ``wiki_only_false_rate``    — MUST-RAG questions that slipped into
-  WIKI_ONLY (the dangerous error; hard-floored at 0);
-* ``necessary_fallback_recall`` — must-RAG questions correctly kept out
-  of WIKI_ONLY;
-* ``unnecessary_fallback_rate`` — wiki-sufficient questions that fell
-  back anyway (the cost metric; reported, not gated).
-
-ABSTAIN is exercised by forcing ``notes.contradictions`` onto the page
-(the same state the daily contradiction scan produces).
+Scores the four-way router against hand-labelled queries. The QA-notes
+page is seeded deterministically (Phase 19: the wiki is query-driven,
+so ingest creates no pages) with live-valid provenance against the
+ingested document; abstain rows force the same ``notes.contradictions``
+state the daily scan produces. Fully offline — routing is pure DB +
+regex, no LLM calls.
 
 No baseline key on purpose — promote deliberately once the label set
-matures. WIKI_ROUTE_ENABLED is pinned ON for the env so the router is
-live; routing itself is pure DB + regex, no LLM calls.
+matures. The hard floor: a must-RAG question can NEVER be routed
+WIKI_ONLY (that is the dangerous failure mode).
 """
 
 from __future__ import annotations
@@ -64,22 +55,58 @@ async def test_wiki_router_metrics():
             from app.services import wiki_router
             from sqlalchemy import select
 
-            from app.models import WikiPage
+            from app.models import Document, WikiPage
 
             rag_id = env.rag_ids[CORPUS]
 
             async with get_sessionmaker()() as db:
-                page = (
+                # Phase 19: the wiki is query-driven — ingest creates no
+                # pages. Seed the QA-notes page the route eval measures
+                # against: content-rich enough for the fact queries to
+                # lexically match, provenance live-valid against the
+                # ingested document.
+                doc = (
                     await db.scalars(
-                        select(WikiPage).where(
-                            WikiPage.rag_id == rag_id,
-                            WikiPage.kind == "doc_summary",
-                        )
+                        select(Document).where(Document.rag_id == rag_id)
                     )
                 ).first()
-                assert page is not None, (
-                    "no wiki page — summary LLM call likely failed during ingest"
+                assert doc is not None
+                # Phase 19: a QA-notes page literally accumulates the
+                # questions that were asked and answered — simulate an
+                # accumulated notebook from this dataset's own queries
+                # (deterministic, honest to the production shape).
+                entries = [
+                    q["query"] for q in queries
+                    # only answered, chunk-backed questions get absorbed —
+                    # out-of-kb refusals never enter the notebook
+                    if q["expected"] in ("wiki_only", "must_rag")
+                ]
+                content = "# Query Notes\n\n" + "\n\n".join(
+                    f"### Q: {entry}\nKey facts and numbers from the source"
+                    f" chunks are retained in this note."
+                    for entry in entries
                 )
+                page = WikiPage(
+                    id=f"qa-notes-eval-{rag_id[:8]}",
+                    rag_id=rag_id,
+                    kind="qa_notes",
+                    slug="qa-notes",
+                    title="Query Notes",
+                    content=content,
+                    source_refs=[
+                        {
+                            "document_id": doc.id,
+                            "chunk_id": "eval-chunk-0",
+                            "content_hash": doc.content_hash,
+                            "filename": "marvel.jsonl",
+                            "page_number": 1,
+                            "score": 0.8,
+                        }
+                    ],
+                    stale=False,
+                )
+                db.add(page)
+                await db.commit()
 
                 routed: list = []
                 details: list = []

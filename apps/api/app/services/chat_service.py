@@ -636,6 +636,34 @@ async def stream_chat_turn(
             queue=get_settings().celery_default_queue,
         )
 
+    # 7c. Phase 19 query-driven wiki: absorb reliable, chunk-backed
+    # answers into the RAG's QA-notes page — fire-and-forget, zero
+    # answer latency; the NEXT similar question routes wiki_only with
+    # these original chunk citations. wiki_only turns are already wiki
+    # knowledge (skip), abstain/refusal turns never reach here.
+    absorb_on = (
+        get_settings().wiki_absorb_enabled
+        and route in (wiki_router.ROUTE_RAG_ONLY, wiki_router.ROUTE_WIKI_PLUS_RAG)
+        and bool(citations)
+    )
+    if absorb_on:
+        from app.celery_client import celery_app
+
+        # the task opens a fresh session — flush this turn's rows first
+        # (no-op when 7b already committed)
+        await db.commit()
+        celery_app.send_task(
+            "app.tasks.wiki_absorb",
+            kwargs={
+                "rag_id": rag_id,
+                "question": user_message,
+                "answer": full_text,
+                "citations": [c.model_dump() for c in citations],
+                "top_score": max(c.retrieval_score for c in citations),
+            },
+            queue=get_settings().celery_default_queue,
+        )
+
     # 8. Done
     yield _event(
         ChatEventDone(

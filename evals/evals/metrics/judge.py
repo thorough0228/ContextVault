@@ -31,10 +31,16 @@ def _build_judge_provider():
     """Judge-side provider instance: same OpenAILLMProvider abstraction,
     but a doubled output budget.
 
-    DeepEval templates make MiniMax-M3 reason at length; with the chat
-    default (8192 output tokens) the <think> block can exhaust the
+    ``JUDGE_LLM_MODEL`` (with optional ``JUDGE_LLM_BASE_URL`` /
+    ``JUDGE_LLM_API_KEY``, defaulting to the main LLM's endpoint) moves
+    judging to a dedicated model — a third-party non-reasoning model
+    avoids same-model self-evaluation bias and is dramatically faster
+    than reasoning chains over the ~124 judge calls per online run.
+
+    DeepEval templates make reasoning models reason at length; with the
+    chat default (8192 output tokens) the <think> block can exhaust the
     budget and the visible content comes back empty, which DeepEval
-    rejects as invalid JSON. 16384 stays far below MiniMax's hard cap.
+    rejects as invalid JSON. 16384 stays far below provider hard caps.
     """
 
     from app.config import get_settings
@@ -42,6 +48,19 @@ def _build_judge_provider():
     from app.llm.openai_provider import OpenAILLMProvider
 
     settings = get_settings()
+    if settings.judge_llm_model:
+        return OpenAILLMProvider(
+            api_key=(
+                settings.judge_llm_api_key or settings.llm_openai_api_key
+            ),
+            base_url=(
+                settings.judge_llm_base_url or settings.llm_openai_base_url
+            ),
+            model=settings.judge_llm_model,
+            timeout_seconds=settings.llm_timeout_seconds,
+            max_context_tokens=max(16384, settings.llm_max_context_tokens * 2),
+            strip_think=True,
+        )
     if settings.llm_provider != "openai":
         return get_llm_provider()  # hash / scripted providers: as-is
     return OpenAILLMProvider(

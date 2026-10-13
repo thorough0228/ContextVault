@@ -234,11 +234,10 @@ def process_document(self, document_id: str, on_ready_supersede: str | None = No
     finally:
         if rid_token is not None:
             _reset_rid(rid_token)
-    # Phase 15 wiki: after the ingestion transaction has committed,
-    # enqueue summary-page generation (eager mode runs it in-process;
-    # a real worker runs it as an isolated task).
-    if result.get("status") == "READY":
-        _enqueue_wiki_generation(document_id)
+    # Phase 19: the wiki is QUERY-DRIVEN now — ingest stays LLM-free
+    # and knowledge accumulates as QA notes distilled from answered
+    # questions (see app.tasks.wiki_absorb). generate_wiki remains
+    # available for manual/on-demand runs only.
     return result
 
 
@@ -697,22 +696,21 @@ def mark_wiki_stale(self, document_id: str) -> dict:
     default_retry_delay=60,
 )
 def wiki_maintenance(self) -> dict:
-    """Phase 17 wiki auto-maintenance (beat, every 30 min). Pure DB:
+    """Phase 17/19 wiki auto-maintenance (beat, every 30 min). Pure DB:
 
-    * rescan — READY docs whose page is missing / stale / built
-      against a diverged content hash get marked + re-enqueued;
-    * lint   — orphan pages (dead provenance / rename leftovers) are
+    * lint — orphan pages (dead provenance / rename leftovers) are
       pruned or deleted, index pages rebuilt.
+
+    (The Phase 17 rescan retired with the query-driven wiki: pages are
+    no longer generated per document, so "missing page" is the normal
+    state, not a fault.)
     """
 
     async def _do(session) -> dict:
         from app.services import wiki_service
 
-        rescan = await wiki_service.rescan_wiki_pages(
-            session, enqueue=_enqueue_wiki_generation
-        )
         lint = await wiki_service.lint_orphan_pages(session)
-        return {"rescan": rescan, "lint": lint}
+        return {"lint": lint}
 
     try:
         _call_async(_run_with_session("wiki-maintenance", _do))
@@ -722,6 +720,59 @@ def wiki_maintenance(self) -> dict:
         )
         raise self.retry(exc=exc)
     return {"status": "ok"}
+
+
+@shared_task(
+    name="app.tasks.wiki_absorb",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+)
+def wiki_absorb(
+    self,
+    *,
+    rag_id: str,
+    question: str,
+    answer: str,
+    citations: list,
+    top_score: float,
+) -> dict:
+    """Phase 19 query-driven wiki: distill one answered, chunk-backed
+    exchange into the RAG's QA-notes page. Fired fire-and-forget after
+    the chat turn — zero answer latency; the NEXT similar question
+    routes wiki_only with these original chunk citations."""
+
+    async def _do(session) -> dict:
+        from app.services import wiki_service
+
+        settings = get_settings()
+        llm = wiki_service._wiki_llm()
+        return await wiki_service.absorb_qa_note(
+            session,
+            rag_id=rag_id,
+            question=question,
+            answer=answer,
+            citations=citations,
+            llm=llm,
+            min_score=settings.wiki_absorb_min_score,
+            max_entries=settings.wiki_note_max_entries,
+        )
+
+    try:
+        result = _call_async(
+            _run_with_session(f"wiki-absorb:{rag_id}", _do)
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "wiki.absorb.failed rag_id=%s err=%s", rag_id, str(exc)[:160]
+        )
+        raise self.retry(exc=exc)
+    if not result.get("absorbed"):
+        logger.info(
+            "wiki.absorb.skipped rag_id=%s reason=%s",
+            rag_id, result.get("reason"),
+        )
+    return result
 
 
 @shared_task(

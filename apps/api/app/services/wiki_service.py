@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 KIND_DOC_SUMMARY = "doc_summary"
 KIND_INDEX = "index"
+KIND_QA_NOTES = "qa_notes"
 
 _SUMMARY_PROMPT = """You maintain the wiki of a knowledge base. Compress the
 following document into a structured markdown summary page for future
@@ -97,19 +98,23 @@ _MAX_BODY_CHARS = 12000
 
 def _wiki_llm():
     """LLM for wiki generation. ``WIKI_LLM_MODEL`` selects an OpenAI-
-    compatible model at embedding_openai_base_url (SiliconFlow) using
-    the embedding key; empty falls back to the main LLM provider."""
+    compatible model, defaulting to the embedding endpoint + key
+    (SiliconFlow); ``WIKI_LLM_BASE_URL`` / ``WIKI_LLM_API_KEY`` move it
+    to another provider. Empty model falls back to the main LLM
+    provider — note that in eval/test contexts that is the hash stub,
+    so a real wiki LLM must be configured explicitly."""
 
     from app.config import get_settings
 
     settings = get_settings()
     if settings.wiki_llm_model:
-        from app.embedding.openai_provider import OpenAIEmbeddingProvider  # noqa: F401
         from app.llm.openai_provider import OpenAILLMProvider
 
+        base_url = settings.wiki_llm_base_url or settings.embedding_openai_base_url
+        api_key = settings.wiki_llm_api_key or settings.embedding_openai_api_key
         return OpenAILLMProvider(
-            api_key=settings.embedding_openai_api_key,
-            base_url=settings.embedding_openai_base_url,
+            api_key=api_key,
+            base_url=base_url,
             model=settings.wiki_llm_model,
             timeout_seconds=settings.llm_timeout_seconds,
         )
@@ -389,25 +394,37 @@ async def wiki_context_for_query(
 
 
 def wiki_citations_from_pages(pages: List[dict]) -> List[dict]:
-    """Synthesise document-level citation dicts from wiki pages.
+    """Synthesise citations from wiki pages.
 
-    A wiki page's ``source_refs`` carry the provenance frontier
-    ({document_id, content_hash, filename}); the routed answer cites
-    documents, not chunks. ``chunk_id``/``page_number`` are synthesised
-    because the Citation schema requires them.
+    QA-notes pages (Phase 19) carry chunk-level provenance captured at
+    absorb time (``chunk_id`` / ``page_number`` / ``score`` / optional
+    ``snippet``) — those become real chunk citations, so a wiki_only
+    answer stays traceable to the original text. Doc-summary refs have
+    no chunk data and fall back to synthesised document-level entries.
     """
 
     out: List[dict] = []
     for p in pages:
         for ref in p.get("source_refs") or []:
+            chunk_id = ref.get("chunk_id")
+            if chunk_id:
+                cid = chunk_id
+                page_number = int(ref.get("page_number") or 0)
+                score = float(ref.get("score") or p["score"])
+                text = ref.get("snippet") or p["content"]
+            else:
+                cid = f"wiki:{p['slug']}:{ref.get('document_id')}"
+                page_number = 0
+                score = float(p["score"])
+                text = p["content"]
             out.append(
                 {
-                    "chunk_id": f"wiki:{p['slug']}:{ref.get('document_id')}",
+                    "chunk_id": cid,
                     "document_id": ref.get("document_id"),
                     "filename": ref.get("filename") or p["slug"],
-                    "page_number": 0,
-                    "chunk_text": p["content"],
-                    "retrieval_score": float(p["score"]),
+                    "page_number": page_number,
+                    "chunk_text": text,
+                    "retrieval_score": score,
                     "metadata": {
                         "source": "wiki",
                         "slug": p["slug"],
@@ -433,7 +450,7 @@ async def prune_pages_for_document(
     rows = await db.scalars(
         select(WikiPage).where(
             WikiPage.rag_id == rag_id,
-            WikiPage.kind == KIND_DOC_SUMMARY,
+            WikiPage.kind.in_([KIND_DOC_SUMMARY, KIND_QA_NOTES]),
         )
     )
     pruned = deleted = 0
@@ -464,73 +481,17 @@ async def prune_pages_for_document(
     return {"pruned": pruned, "deleted": deleted}
 
 
-async def rescan_wiki_pages(db: AsyncSession, *, enqueue) -> dict:
-    """Maintenance pass 1 (Phase 17): find READY documents whose wiki
-    page is missing, stale, or built against a diverged content hash
-    (a rename leaves hash-diverged pages that the update-path stale
-    marker misses), mark them stale, and re-enqueue generation.
-
-    ``enqueue`` is ``_enqueue_wiki_generation``-shaped (injected so
-    tests can spy on it). Pure DB — safe on every beat tick.
-    """
-
-    from app.models import Chunk
-
-    docs = (
-        (await db.scalars(select(Document).where(Document.status == "READY")))
-        .all()
-    )
-    docs_by_id = {d.id: d for d in docs}
-    pages = (
-        await db.scalars(
-            select(WikiPage).where(WikiPage.kind == KIND_DOC_SUMMARY)
-        )
-    ).all()
-
-    marked = 0
-    enqueued_ids: List[str] = []
-    for page in pages:
-        diverged = False
-        for ref in page.source_refs or []:
-            doc = docs_by_id.get(ref.get("document_id"))
-            if doc is not None and ref.get("content_hash") != doc.content_hash:
-                diverged = True
-        if diverged and not page.stale:
-            page.stale = True
-            marked += 1
-            for ref in page.source_refs or []:
-                if ref.get("document_id") in docs_by_id:
-                    enqueued_ids.append(ref["document_id"])
-
-    existing_slugs = {(p.rag_id, p.slug) for p in pages}
-    for doc in docs:
-        slug = _summary_slug(doc.filename)
-        if (doc.rag_id, slug) in existing_slugs:
-            continue
-        # a page-less doc with no chunk body would skip regeneration
-        # forever (empty_body) — don't re-enqueue it every tick
-        has_body = await db.scalar(
-            select(Chunk.id).where(Chunk.document_id == doc.id).limit(1)
-        )
-        if has_body:
-            enqueued_ids.append(doc.id)
-
-    enqueued = 0
-    for document_id in dict.fromkeys(enqueued_ids):  # dedupe, keep order
-        enqueue(document_id=document_id)
-        enqueued += 1
-    await db.commit()
-    if marked or enqueued:
-        logger.info("wiki.rescan.ok marked=%d enqueued=%d", marked, enqueued)
-    return {"marked": marked, "enqueued": enqueued}
-
-
 async def lint_orphan_pages(db: AsyncSession) -> dict:
-    """Maintenance pass 2 (Phase 17): drop wiki pages whose provenance
+    """Maintenance pass (Phase 17/19): drop wiki pages whose provenance
     is gone — every source_refs entry points at a deleted document, or
-    the slug no longer matches any live document filename (rename
-    leftovers). Prunes partially-dead refs, rebuilds the affected
-    RAGs' index pages, evicts their caches. Pure DB."""
+    (doc_summary only) the slug no longer matches any live document
+    filename (rename leftovers). Prunes partially-dead refs, rebuilds
+    the affected RAGs' index pages, evicts their caches. Pure DB.
+
+    QA-notes pages participate by provenance only: their slug is a
+    fixed per-RAG name, not a filename, so the rename rule never
+    applies to them.
+    """
 
     docs = (await db.scalars(select(Document))).all()
     docs_by_id = {d.id: d for d in docs}
@@ -540,7 +501,9 @@ async def lint_orphan_pages(db: AsyncSession) -> dict:
 
     pages = (
         await db.scalars(
-            select(WikiPage).where(WikiPage.kind == KIND_DOC_SUMMARY)
+            select(WikiPage).where(
+                WikiPage.kind.in_([KIND_DOC_SUMMARY, KIND_QA_NOTES])
+            )
         )
     ).all()
 
@@ -550,7 +513,8 @@ async def lint_orphan_pages(db: AsyncSession) -> dict:
         refs = page.source_refs or []
         live_refs = [r for r in refs if r.get("document_id") in docs_by_id]
         slug_live = page.slug in rag_slugs.get(page.rag_id, set())
-        if not live_refs or not slug_live:
+        rename_rule = page.kind == KIND_DOC_SUMMARY
+        if not live_refs or (rename_rule and not slug_live):
             await db.delete(page)
             deleted += 1
             touched_rags.append(page.rag_id)
@@ -675,6 +639,263 @@ async def detect_contradictions(
             rag_id, len(findings), len(involved),
         )
     return findings
+
+
+# ---------------------------------------------------------------------------
+# Phase 19: query-driven QA notes (absorb answered questions)
+# ---------------------------------------------------------------------------
+
+_QA_NOTES_SLUG = "qa-notes"
+_QA_NOTES_TITLE = "Query Notes"
+
+_QA_ABSORB_PROMPT = """You maintain the query-driven wiki of a knowledge
+base: a notebook of durable Q&A knowledge distilled from answered
+questions. Distill the exchange below into ONE note entry that future
+readers — and the retrieval routing layer — can match and reuse.
+
+Rules:
+- Rewrite the question as a short, self-contained, search-friendly
+  sentence (drop conversational filler, keep the concrete subject).
+- Keep the key facts, numbers, names and caveats from the answer;
+  drop phrasing like "according to your knowledge base".
+- NEVER add facts that are not in the answer or the cited chunks.
+
+Answer with ONLY a JSON object:
+{{"question": "...", "note": "..."}}
+
+Question asked:
+{question}
+
+Assistant answer:
+{answer}
+
+Cited chunks:
+{chunks}
+"""
+
+
+def _normalize_question(q: str) -> str:
+    import re as _re
+
+    return _re.sub(r"\s+", " ", (q or "").strip().lower())
+
+
+def _render_qa_content(items: List[dict]) -> str:
+    """Deterministically render the notes page content from the item
+    list — content is the lexical-matching artifact, meta carries the
+    structured index."""
+
+    parts = [
+        "# Query Notes",
+        "",
+        "Distilled from answered questions; every entry cites the chunks"
+        " that backed the answer.",
+        "",
+    ]
+    for item in items:
+        parts.append(f"### Q: {item['question']}")
+        parts.append(item["note"])
+        srcs = " · ".join(
+            f"{s['filename']} p.{s['page_number']}" for s in item["sources"]
+        )
+        parts.append(f"Sources: {srcs}")
+        parts.append("")
+    return "\n".join(parts).strip() + "\n"
+
+
+def _parse_absorb_object(raw: str) -> Optional[dict]:
+    """Best-effort strict-JSON object extraction (same posture as the
+    contradiction parser). Returns None when the answer is not a JSON
+    object at all."""
+
+    import json as _json
+    import re as _re
+
+    text = (raw or "").strip()
+    fence = _re.search(r"```(?:json)?\s*(.*?)\s*```", text, _re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        data = _json.loads(text[start : end + 1])
+    except _json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    question = str(data.get("question") or "").strip()
+    note = str(data.get("note") or "").strip()
+    if not question or not note:
+        return None
+    return {"question": question[:200], "note": note[:1500]}
+
+
+async def absorb_qa_note(
+    db: AsyncSession,
+    *,
+    rag_id: str,
+    question: str,
+    answer: str,
+    citations: List[dict],
+    llm: LLMProvider,
+    min_score: float,
+    max_entries: int,
+) -> dict:
+    """Distill one answered, chunk-backed exchange into the RAG's
+    QA-notes page (Phase 19). The note inherits the ORIGINAL chunk
+    citations, so a future wiki_only answer on the same question stays
+    traceable to the source text.
+
+    Gates: citations must be non-empty and top score must clear
+    ``min_score`` (the caller's reliability bar). LLM/parse failures
+    degrade to a logged skip — a bad distillation never lands.
+    """
+
+    if not citations:
+        return {"absorbed": False, "reason": "no_citations"}
+    top_score = max(
+        float(c.get("retrieval_score") or 0.0) for c in citations
+    )
+    if top_score < min_score:
+        return {"absorbed": False, "reason": "low_score"}
+
+    chunks_block = "\n\n".join(
+        f"[{i}] {c.get('filename', '?')} p.{c.get('page_number', 0)}\n"
+        f"{(c.get('chunk_text') or '')[:500]}"
+        for i, c in enumerate(citations[:5], start=1)
+    )
+    try:
+        raw = await llm.chat(
+            [{
+                "role": "user",
+                "content": _QA_ABSORB_PROMPT.format(
+                    question=question[:1000],
+                    answer=(answer or "")[:2000],
+                    chunks=chunks_block,
+                ),
+            }]
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "wiki.absorb.llm_failed rag_id=%s err=%s", rag_id, str(exc)[:160]
+        )
+        return {"absorbed": False, "reason": "llm_failed"}
+    distilled = _parse_absorb_object(raw)
+    if distilled is None:
+        logger.warning(
+            "wiki.absorb.parse_failed rag_id=%s — note skipped", rag_id
+        )
+        return {"absorbed": False, "reason": "parse_failed"}
+
+    # capture live provenance: the doc hashes anchor staleness tracking
+    doc_ids = list(
+        {c.get("document_id") for c in citations if c.get("document_id")}
+    )
+    doc_hashes: dict = {}
+    if doc_ids:
+        rows = await db.execute(
+            select(Document.id, Document.content_hash).where(
+                Document.id.in_(doc_ids)
+            )
+        )
+        doc_hashes = {doc_id: h for doc_id, h in rows.all()}
+
+    new_refs = []
+    for c in citations:
+        new_refs.append(
+            {
+                "document_id": c.get("document_id"),
+                "chunk_id": c.get("chunk_id"),
+                "content_hash": doc_hashes.get(c.get("document_id")),
+                "filename": c.get("filename"),
+                "page_number": int(c.get("page_number") or 0),
+                "score": c.get("retrieval_score"),
+                "snippet": (c.get("chunk_text") or "")[:300],
+            }
+        )
+
+    page = await db.scalars(
+        select(WikiPage).where(
+            WikiPage.rag_id == rag_id,
+            WikiPage.kind == KIND_QA_NOTES,
+        )
+    )
+    page_obj = page.first()
+    if page_obj is None:
+        page_obj = WikiPage(
+            id=str(uuid.uuid4()),
+            rag_id=rag_id,
+            kind=KIND_QA_NOTES,
+            slug=_QA_NOTES_SLUG,
+            title=_QA_NOTES_TITLE,
+            content="",
+            source_refs=[],
+            stale=False,
+            meta={"version": 0, "items": []},
+        )
+        db.add(page_obj)
+
+    meta = page_obj.meta or {}
+    items: List[dict] = list(meta.get("items") or [])
+    q_norm = _normalize_question(distilled["question"])
+    sources = [
+        {
+            "filename": c.get("filename") or "?",
+            "page_number": int(c.get("page_number") or 0),
+        }
+        for c in citations[:5]
+    ]
+    entry = {
+        "q_norm": q_norm,
+        "question": distilled["question"],
+        "note": distilled["note"],
+        "sources": sources,
+    }
+    replaced = False
+    for i, existing in enumerate(items):
+        if existing.get("q_norm") == q_norm:
+            items[i] = entry  # same question asked again → refresh, LRU to end
+            items.append(items.pop(i))
+            replaced = True
+            break
+    else:
+        items.append(entry)
+    while len(items) > max_entries:
+        items.pop(0)  # FIFO: oldest question retires
+
+    # merge provenance, dedup by (document_id, chunk_id)
+    merged: dict = {
+        (r.get("document_id"), r.get("chunk_id")): r
+        for r in (page_obj.source_refs or [])
+    }
+    for ref in new_refs:
+        merged[(ref.get("document_id"), ref.get("chunk_id"))] = ref
+    page_obj.source_refs = list(merged.values())
+
+    page_obj.content = _render_qa_content(items)
+    page_obj.stale = False
+    version = int(meta.get("version") or 0) + 1
+    page_obj.meta = {
+        "version": version,
+        "items": items,
+        "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+    await db.commit()
+
+    from app.services import wiki_cache
+
+    await wiki_cache.invalidate(rag_id)
+    logger.info(
+        "wiki.absorb.ok rag_id=%s entries=%d replaced=%s version=%d",
+        rag_id, len(items), replaced, version,
+    )
+    return {
+        "absorbed": True,
+        "replaced": replaced,
+        "entries": len(items),
+        "version": version,
+    }
 
 
 

@@ -226,28 +226,29 @@ fixed+hybrid **0.939** / recursive 0.883 / semantic 0.796(overall hit@5),
 配套脚本 `scripts/mineru_to_markdown.py`:把 MinerU 输出目录清洗为纯
 markdown 后直接上传(.md 为受支持类型)。
 
-### 5e. Wiki 知识层(LLM 维护的持久摘要,Phase 15)
+### 5e. Wiki 知识层(查询驱动的 QA 笔记,Phase 15→19)
 
-Karpathy 式 LLM Wiki:在原始 chunk 检索(L3)之上加一层 LLM 生成、
-持久化在 `wiki_pages` 表的知识页(L2),chat 时 wiki 优先注入:
+Karpathy 式 LLM Wiki,但**查询驱动**而非上传驱动:wiki 是一本"笔记",
+沉淀被回答过的问题,而不是每上传一篇文档就盲蒸馏一页摘要(实测
+盲蒸馏命中率仅 0.1-0.4,大部分生成成本被浪费):
 
-- **doc_summary 页**:文档异步到达 READY 后,由 `app.tasks.generate_wiki`
-  调 LLM 把全文压缩成结构化摘要(Key Points / Key Data / Open Questions),
-  一文档一页,`source_refs` 记录 `{document_id, content_hash, filename}`
-  溯源前沿;幂等 upsert(同 slug 覆盖)
-- **index 页**:每 RAG 一页目录,从所有非 stale 的 doc_summary 重建
-  ("LLM 先读目录再答题")
-- **失效**:文档更新(replace/bluegreen)时按 content_hash 对比把引用页
-  标 `stale=true`;重新生成后自动复位。chat 检索(`wiki_context_for_query`,
-  词重叠打分)只取非 stale 页
-- **注入**:`_build_prompt_messages` 在 memories 之后、history 之前插入
-  "Compiled knowledge-base digest" 系统块
-
-配置 `WIKI_LLM_MODEL`:空 = 走主 LLM(`LLM_PROVIDER`);非空 = 用
-embedding 的 OpenAI 兼容端点 + key 跑指定模型(如硅基流动
-`Qwen/Qwen2.5-32B-Instruct`),主 LLM 欠费/不可用时 wiki 生成不受影响。
-LLM 失败静默降级(wiki 缺页不影响 chunk RAG 主链路),日志以
-`wiki.summary.llm_failed`(ERROR)暴露。
+- **沉淀**(Phase 19):chat 回答完成后,凡是有 chunk 引用且检索分
+  达标(`WIKI_ABSORB_MIN_SCORE`)的回答,异步蒸馏进该 RAG 的
+  **QA 笔记页**(`kind=qa_notes`,每 RAG 一页,FIFO 上限
+  `WIKI_NOTE_MAX_ENTRIES`)——fire-and-forget,零回答延迟;条目按
+  规范化问题去重(同题再问即刷新)
+- **溯源**:每条笔记继承回答时的**原始 chunk 级引用**
+  (`document_id/chunk_id/content_hash/page_number/score`),下次
+  wiki_only 回答直接引用到具体原文块——笔记永远可追溯
+- **失效**:源文档更新 → 笔记引用的 content_hash 与文档现行 hash
+  发散 → 路由器实时降级 STALE(无需等待维护);文档删除 → 引用即
+  刻被 prune
+- **上传零 LLM 成本**:ingest 不再触发任何 wiki 生成;
+  `generate_wiki`(文档摘要页)保留为手动能力,默认不跑
+- **配置**:`WIKI_LLM_MODEL` 指定蒸馏模型(默认挂 embedding 端点,
+  `WIKI_LLM_BASE_URL/API_KEY` 可独立指定——当前 DeepSeek);
+  `WIKI_ABSORB_ENABLED` 总开关;LLM 失败/解析失败一律跳过并告警,
+  坏笔记绝不落库
 
 ### 5f. Wiki 边界路由(Phase 18,四路 Query Router)
 
@@ -666,7 +667,9 @@ cd apps/web && npm run typecheck && npm run build
 | LLM | `LLM_PROVIDER`, `LLM_MODEL`, `LLM_OPENAI_API_KEY`, `LLM_MAX_CONTEXT_TOKENS` |
 | Wiki (Phase 15) | `WIKI_LLM_MODEL` |
 | Wiki 路由 (Phase 16) | `WIKI_ROUTE_ENABLED`, `WIKI_ROUTE_MIN_SCORE` |
+| Wiki 笔记沉淀 (Phase 19) | `WIKI_ABSORB_ENABLED`, `WIKI_ABSORB_MIN_SCORE`, `WIKI_NOTE_MAX_ENTRIES` |
 | Wiki 缓存/维护 (Phase 17) | `WIKI_CACHE_ENABLED`, `WIKI_CACHE_TTL_SECONDS` |
+| Wiki 蒸馏模型 | `WIKI_LLM_MODEL`, `WIKI_LLM_BASE_URL`, `WIKI_LLM_API_KEY` |
 | 可观测性 | `LOG_FORMAT` (`plain` / `json`), `UPLOAD_MAX_BYTES` |
 
 `JWT_SECRET` / `POSTGRES_PASSWORD` / `S3_SECRET_KEY` 在任何非

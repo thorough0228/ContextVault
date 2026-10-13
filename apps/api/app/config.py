@@ -212,6 +212,12 @@ class Settings(BaseSettings):
     # embedding API key (e.g. SiliconFlow "Qwen/Qwen2.5-32B-Instruct")
     # — useful when the main LLM account is separate/out of credit.
     wiki_llm_model: str = ""
+    # Optional endpoint override for the wiki LLM. Empty = use the
+    # embedding endpoint + key (the original Phase 15 arrangement);
+    # set both when the wiki model lives on a different provider than
+    # the embedder (e.g. wiki on DeepSeek, embeddings on SiliconFlow).
+    wiki_llm_base_url: str = ""
+    wiki_llm_api_key: str = ""
     # Wiki-first routing (Phase 16): when enabled, a chat turn whose
     # query lexically matches a non-stale wiki page at or above
     # wiki_route_min_score is answered from the distilled pages and
@@ -221,6 +227,13 @@ class Settings(BaseSettings):
     # block (Phase 15 behaviour).
     wiki_route_enabled: bool = False
     wiki_route_min_score: float = 0.3
+    # Query-driven wiki (Phase 19): after a turn completes, reliable
+    # chunk-backed answers are distilled into the RAG's QA-notes page
+    # (async, zero chat latency). The next similar question routes
+    # wiki_only with the original chunk citations.
+    wiki_absorb_enabled: bool = False
+    wiki_absorb_min_score: float = 0.35
+    wiki_note_max_entries: int = 50
     # Wiki hot cache (Phase 17): non-stale wiki pages per RAG cached in
     # Redis (db 0) with a TTL safety net plus explicit invalidation on
     # every write path. Disabled by default — when Redis is unreachable
@@ -242,6 +255,16 @@ class Settings(BaseSettings):
     # Reasoning models (MiniMax-M3, DeepSeek-R1, ...) stream <think>
     # blocks inline — strip them so the chat UI shows the answer only.
     llm_strip_think: bool = True
+
+    # ---- Judge (evals) LLM override ----
+    # When set, DeepEval judging uses this OpenAI-compatible endpoint
+    # instead of the main LLM. Prefer a third-party NON-reasoning
+    # model: same-model self-evaluation has documented scoring bias,
+    # and reasoning chains make the ~124 judge calls per online run
+    # prohibitively slow.
+    judge_llm_model: str = ""
+    judge_llm_base_url: str = ""
+    judge_llm_api_key: str = ""
 
     # Bounded multi-turn memory — Phase 5 caps the prompt at this
     # many prior turns to prevent silent context blow-ups.

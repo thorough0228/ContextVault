@@ -10,7 +10,7 @@ judge 与被测系统全部通过项目现有的 `LLMProvider` / `EmbeddingProvi
 | # | 套件 | 文件 | 指标 | 依赖 |
 |---|------|------|------|------|
 | ① | 检索质量 | `suites/test_retrieval.py` | Recall@k / HitRate@k / MRR@k / NDCG@k（k=1,3,5,10） | 离线（本地 bge）+ golden 数据集 |
-| ② | 生成质量 | `suites/test_generation.py` | faithfulness / answer_relevancy / citation_accuracy / refusal_correctness | **在线**（MiniMax 聊天 + DeepEval judge） |
+| ② | 生成质量 | `suites/test_generation.py` | faithfulness / answer_relevancy / citation_accuracy / refusal_correctness | **在线**（DeepSeek 答题 + judge 评卷；judge 经 `JUDGE_LLM_*` 独立配置，当前硅基流动 Qwen——第三方非推理，消自评偏差） |
 | ③ | 流式契约 | `suites/test_streaming_contract.py` | NDJSON 事件序 / `<think>` 过滤边界 / 错误路径不落库 / 重试次数 | 离线 |
 | ④ | 健壮性 | `suites/test_robustness.py` | 注入抵抗（金丝雀标记 + G-Eval）/ 攻击下检索不脱落 | 离线机制 + **在线**语义 |
 | ⑤ | **ACL 泄露** | `suites/test_acl.py` | 跨租户检索/更新/回滚/Chat/记忆/BM25 腿/Bluegreen 链隔离矩阵 | 离线（双租户确定性） |
@@ -29,7 +29,7 @@ cd evals
 # 离线全量（CI 安全，零网络）
 python -m pytest evals/suites -m offline
 
-# 在线生成质量（花 MiniMax token；默认每语料采样 10 题）
+# 在线生成质量（花 DeepSeek token；默认每语料采样 10 题）
 python -m pytest evals/suites -m online
 
 # live profile：打真实 docker 栈（pgvector 生产路径；需先起栈 + API + worker）
@@ -133,7 +133,7 @@ evals/suites/test_retrieval.py::test_retrieval_metrics -m offline -s`
 - 健壮性套件门禁是程序化的（canary=0、系统提示零泄露、引用保留率），
   `reference_injection_resistance` 仅为 judge 参考分。
 
-judge 模型 = `.env` 中的 LLM 配置（当前 MiniMax-M3）。**换更强 judge 只改 .env，
+judge 模型默认 = 主 LLM；`JUDGE_LLM_MODEL/BASE_URL/API_KEY` 可独立指定（当前硅基流动 Qwen，非推理——推理模型自评每次 20-60s，124 次评卷会把 online 套件拖到小时级）。注意 judge 的输出预算固定 16384 tokens（`metrics/judge.py`），DeepSeek/硅基流动均接受。**换更强 judge 只改 .env，
 零代码改动**。已知局限（有实证）：M3 自评存在自偏好且**打分会塌缩**（完美回答也得
 0.1），因此健壮性套件以**程序化指标为主门禁**（金丝雀泄漏数=0、系统提示零泄露、
 引用保留率），judge 分数仅作参考（`reference_injection_resistance`）。

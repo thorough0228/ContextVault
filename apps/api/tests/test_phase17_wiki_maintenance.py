@@ -1,4 +1,9 @@
-"""Phase 17: wiki auto-maintenance — rescan, orphan lint, contradictions."""
+"""Phase 17/19: wiki auto-maintenance — orphan lint, contradictions.
+
+(The Phase 17 rescan retired in Phase 19: the wiki is query-driven, so
+a missing page is the normal state, not a fault — stale provenance is
+downgraded live by the router instead.)
+"""
 
 from __future__ import annotations
 
@@ -47,63 +52,6 @@ def _page(db, *, rag_id="r1", slug, doc_id, content_hash="h1", stale=False, note
     )
     db.add(page)
     return page
-
-
-# ---------------------------------------------------------------------------
-# rescan
-# ---------------------------------------------------------------------------
-
-
-async def test_rescan_marks_diverged_and_enqueues(client_with_db, db_session):
-    doc = _doc(db_session, doc_id="d1")
-    await db_session.commit()
-    # page built against an OLD hash (update-path stale marker missed it
-    # — e.g. the rename case) while the doc already moved on
-    _page(db_session, slug="doc.txt", doc_id="d1", content_hash="old-hash")
-    await db_session.commit()
-
-    enqueued: list = []
-    result = await wiki_service.rescan_wiki_pages(
-        db_session, enqueue=lambda *, document_id: enqueued.append(document_id)
-    )
-    assert result["marked"] == 1
-    assert enqueued == ["d1"]
-    page = (
-        await db_session.execute(select(WikiPage).where(WikiPage.slug == "doc.txt"))
-    ).scalars().first()
-    assert page.stale is True
-
-
-async def test_rescan_enqueues_pageless_docs_but_not_empty_ones(client_with_db, db_session):
-    _doc(db_session, doc_id="d1")              # page missing, has body → enqueue
-    # page missing AND no chunk body → skip (regen would empty_body-skip)
-    db_session.add(
-        Document(
-            id="d2", rag_id="r1", filename="empty.txt", file_type="txt",
-            file_size=0, storage_key="k2", status="READY", content_hash="h2",
-        )
-    )
-    await db_session.commit()
-
-    enqueued: list = []
-    await wiki_service.rescan_wiki_pages(
-        db_session, enqueue=lambda *, document_id: enqueued.append(document_id)
-    )
-    assert enqueued == ["d1"]
-
-
-async def test_rescan_skips_fresh_pages(client_with_db, db_session):
-    _doc(db_session, doc_id="d1")
-    await db_session.commit()
-    _page(db_session, slug="doc.txt", doc_id="d1", content_hash="h1")
-    await db_session.commit()
-
-    enqueued: list = []
-    result = await wiki_service.rescan_wiki_pages(
-        db_session, enqueue=lambda *, document_id: enqueued.append(document_id)
-    )
-    assert result == {"marked": 0, "enqueued": 0}
-    assert enqueued == []
 
 
 # ---------------------------------------------------------------------------

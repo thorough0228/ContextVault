@@ -47,7 +47,7 @@ _MANAGED_ENV_KEYS = (
     "MEMORY_EXTRACTION_ENABLED", "MEMORY_INJECTION_ENABLED",
     "LLM_PROVIDER", "LLM_MODEL",
     "WIKI_ROUTE_ENABLED", "WIKI_ROUTE_MIN_SCORE",
-    "WIKI_CACHE_ENABLED",
+    "WIKI_CACHE_ENABLED", "WIKI_LLM_MODEL",
     "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND",
 )
 
@@ -260,6 +260,7 @@ class SqliteEvalEnv:
         memory_injection: bool = False,
         document_update_strategy: str = "replace",
         chunker_type: str = "fixed",
+        wiki_llm: str = "hash",  # "hash" (offline pages) | "inherit" (.env WIKI_LLM_MODEL)
         ingest_timeout_s: float = 120.0,
         tmp_root: Optional[Path] = None,
     ) -> None:
@@ -267,6 +268,7 @@ class SqliteEvalEnv:
         self._corpora_names = corpora
         self._embedding = embedding
         self._llm = llm
+        self._wiki_llm = wiki_llm
         self._search_mode = search_mode
         self._memory_extraction = memory_extraction
         self._memory_injection = memory_injection
@@ -359,6 +361,12 @@ class SqliteEvalEnv:
             # Phase 17 wiki cache — a developer .env flip cannot leak in
             "WIKI_CACHE_ENABLED": "0",
         }
+        if self._wiki_llm == "hash":
+            # Wiki pages from the eval's own (hash) LLM: instant +
+            # deterministic. Suites that measure the REAL distilled
+            # layer (test_wiki / test_wiki_router) pass wiki_llm=
+            # "inherit" to keep .env's WIKI_LLM_MODEL.
+            env["WIKI_LLM_MODEL"] = ""
         if self._embedding == "production":
             # Inherit the API's own embedding provider from .env (the
             # SiliconFlow/OpenAI-compatible endpoint) — the eval then

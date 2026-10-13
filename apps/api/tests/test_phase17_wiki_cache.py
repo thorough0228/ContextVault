@@ -180,12 +180,20 @@ async def test_document_delete_prunes_page(
         assert up.status_code == 201, up.text
         doc_id = up.json()["id"]
 
-        page = (
+        # Phase 19: ingest no longer auto-generates wiki pages — seed
+        # one explicitly so the delete path has something to prune
+        # (commit: an open write txn on db_session would lock the
+        # request's DELETE against the file-backed SQLite)
+        doc = (
             await db_session.execute(
-                select(WikiPage).where(WikiPage.rag_id == rid)
+                select(Document).where(Document.id == doc_id)
             )
         ).scalars().first()
-        assert page is not None, "eager worker should have generated the page"
+        page = await wiki_service.generate_doc_summary_page(
+            db_session, doc=doc, llm=_SummaryLLM()
+        )
+        assert page is not None, "seeded page must exist"
+        await db_session.commit()
 
         resp = await client_with_db.delete(
             f"/api/v1/documents/{doc_id}", headers=headers
