@@ -12,7 +12,6 @@ import io
 import json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -114,53 +113,33 @@ def _parse_pdf_pymupdf(stream: io.BufferedIOBase) -> List[ParsedPage]:
 def _parse_pdf_mineru(
     stream: io.BufferedIOBase, *, timeout_s: float = 600.0
 ) -> List[ParsedPage]:
-    """Engine 1: the mineru CLI as an isolated subprocess.
+    """Engine 1: the mineru.net official API (v4 精准解析).
 
-    The layout model never loads inside this process (it would bloat
-    the worker and fight for GPU memory). Writes the stream to a temp
-    .pdf, runs ``mineru -p ... -o ...``, then converts the produced
-    markdown (tables arrive as inline HTML — cleaned by
-    ``mineru_to_markdown.clean_mineru_markdown``) into virtual pages
-    split at markdown H1/H2 headings.
+    The PDF bytes upload to mineru.net, parsing happens server-side,
+    and the result zip's markdown comes back for the shared cleaning +
+    pagination pipeline (no local model process at all). Failures raise
+    :class:`~app.ingest.mineru_api.MineruApiError`; the auto-chain
+    degrades to the next engine.
     """
 
-    import subprocess
-    import tempfile
-
+    from app.config import get_settings
+    from app.ingest.mineru_api import MineruApiError, fetch_markdown_via_api
     from app.ingest.mineru_convert import clean_mineru_markdown
 
+    settings = get_settings()
     data = stream.read()
-
-    with tempfile.TemporaryDirectory(prefix="cv-mineru-") as tmp:
-        tmp_dir = Path(tmp)
-        pdf_path = tmp_dir / "input.pdf"
-        pdf_path.write_bytes(data)
-        out_dir = tmp_dir / "out"
-
-        import os as _os
-
-        source = _os.environ.get("MINERU_SOURCE", "modelscope")
-        import sys
-
-        exe = Path(sys.executable).parent / "Scripts" / "mineru.exe"
-        if not exe.exists():  # posix venv/bin layout
-            exe = Path(sys.executable).parent / "mineru"
-        out_md = tmp_dir / "out.md"
-        result = subprocess.run(
-            [str(exe), "parse", str(pdf_path),
-             "--tier", "flash", "--format", "markdown",
-             "-o", str(out_md), "--wait", "300"],
-            capture_output=True,
-            timeout=timeout_s,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"mineru exited {result.returncode}: "
-                f"{result.stderr.decode('utf-8', 'ignore')[:200]}"
+    try:
+        clean = clean_mineru_markdown(
+            fetch_markdown_via_api(
+                data,
+                token=settings.mineru_api_token,
+                base_url=settings.mineru_api_base_url,
+                timeout_s=timeout_s,
+                poll_interval=settings.mineru_api_poll_interval_seconds,
             )
-        if not out_md.exists():
-            raise RuntimeError("mineru produced no markdown output")
-        clean = clean_mineru_markdown(out_md.read_text(encoding="utf-8"))
+        )
+    except MineruApiError as exc:
+        raise RuntimeError(f"mineru api: {exc}") from exc
 
     return _markdown_to_pages(clean)
 

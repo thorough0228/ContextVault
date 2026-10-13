@@ -6,7 +6,7 @@
 
 严格的 `User → RAG → Document → Chunk` 归属链、pgvector 向量检索、
 混合检索(向量+BM25+rerank)、MinerU 文档解析、流式对话 + 来源引用、
-对话记忆与文档灰度更新。15 个 Phase 迭代,生产可用。
+对话记忆与文档灰度更新。19 个 Phase 迭代,生产可用。
 
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)]()
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)]()
@@ -43,7 +43,7 @@
 - **Belt-and-suspenders 的可观测性。** `X-Request-Id` 从 API 流向
   Celery task、再到 worker 日志。`LOG_FORMAT=json` 一键切换全链路到
   结构化输出。
-- **15 个 Phase、339 个测试、0 失败。** 单测、集成、E2E happy path、
+- **19 个 Phase、395 个测试、0 失败。** 单测、集成、E2E happy path、
   跨租户共存、ACL 泄露矩阵、检索质量基线 —— 每一处改动都有测试与回归。
 
 ---
@@ -216,9 +216,11 @@ fixed+hybrid **0.939** / recursive 0.883 / semantic 0.796(overall hit@5),
 
 `PDF_PARSER=auto` 时 PDF 解析按优先级降级链执行:
 
-1. **MinerU**(外部 CLI 子进程,4.x:`mineru parse --tier flash`):布局/表格/OCR
-   质量最高;产出的 markdown 经内置清洗(HTML 表格 → MD 管道表、剥图片引用、
-   保留 LaTeX 公式),按 H1/H2 标题切虚拟页
+1. **MinerU**(mineru.net 官方 API,v4 精准解析:上传 → 轮询 → 结果 zip 取
+   full.md):布局/表格/OCR 质量最高且**不在本地跑模型**;产出的 markdown
+   经内置清洗(HTML 表格 → MD 管道表、剥图片引用、保留 LaTeX 公式),
+   按 H1/H2 标题切虚拟页。需 `MINERU_API_TOKEN`(mineru.net API 管理页
+   创建);token 未配置/调用失败自动降级到下一引擎
 2. **Unstructured**(`partition_pdf`,可选依赖)
 3. **PyMuPDF**(文本层,兜底/默认)
 
@@ -526,7 +528,7 @@ docker compose -f infrastructure/docker-compose.yml --env-file .env up --build
 
 ```bash
 cd apps/api
-python -m pytest --no-summary -q          # 222 API tests
+python -m pytest --no-summary -q          # 311 API tests
 cd ../worker
 python -m pytest --no-summary -q          # 7 worker tests
 cd ../..
@@ -535,7 +537,7 @@ cd apps/web
 npm run build                             # 前端 production build
 ```
 
-完整 339 个测试应该全绿。详见「[测试与质量](#测试与质量)」。
+完整 395 个测试应该全绿。详见「[测试与质量](#测试与质量)」。
 
 ---
 
@@ -594,12 +596,12 @@ contextvault/
 
 | 套件 | 数量 | 命令 |
 |---|---|---|
-| API(单测 + 集成 + E2E + 解析/记忆/更新) | 257 | `cd apps/api && pytest` |
+| API(单测 + 集成 + E2E + 解析/记忆/更新/wiki) | 311 | `cd apps/api && pytest` |
 | Worker | 7 | `cd apps/worker && pytest` |
-| evals(检索/生成/健壮性/ACL 离线部分) | 66 | `cd evals && pytest evals/suites -m offline` |
+| evals(检索/生成/健壮性/ACL/路由 离线部分) | 68 | `cd evals && pytest evals/suites -m offline` |
 | 跨应用 smoke + evals 离线编排 | 9 | `pytest tests/` 在 repo 根 |
 | 前端 build | - | `cd apps/web && npm run build` |
-| **合计** | **339**(在线评测按需另跑) | **0 失败**(2026-09-24 实跑) |
+| **合计** | **395**(在线评测按需另跑) | **0 失败**(2026-10-13 实跑) |
 
 ### E2E 覆盖
 

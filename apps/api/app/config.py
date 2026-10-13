@@ -108,10 +108,17 @@ class Settings(BaseSettings):
     )
     # PDF text-extraction engine: "auto" tries mineru → unstructured →
     # pymupdf in priority order; explicit values pin one engine. mineru
-    # runs as an external CLI subprocess (model stays out of this
-    # process) and degrades gracefully when not installed.
+    # calls the mineru.net official API (v4 精准解析: upload → poll →
+    # zip download) — no local model process; degrades gracefully to
+    # the next engine when the API is unconfigured/unreachable.
     pdf_parser: str = "auto"
     pdf_parser_timeout_seconds: float = 600.0
+    # mineru.net credentials + polling cadence. Token from the mineru.net
+    # API-manage page (Bearer auth); empty → the mineru engine fails
+    # fast with a clear message and the auto-chain falls through.
+    mineru_api_base_url: str = "https://mineru.net"
+    mineru_api_token: str = ""
+    mineru_api_poll_interval_seconds: float = 5.0
 
     # Chunker knobs — read by the worker at task-time so changes here
     # take effect without redeploying the API.
