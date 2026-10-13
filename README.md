@@ -2,11 +2,12 @@
 
 # ContextVault
 
-### 多租户 RAG-as-a-Service 平台
+### 多租户 RAG-as-a-Service 平台 · LLM Wiki 混合记忆系统
 
 严格的 `User → RAG → Document → Chunk` 归属链、pgvector 向量检索、
-混合检索(向量+BM25+rerank)、MinerU 文档解析、流式对话 + 来源引用、
-对话记忆与文档灰度更新。19 个 Phase 迭代,生产可用。
+混合检索(向量+BM25+rerank)、**LLM Wiki 知识层**、四路边界路由、
+MinerU 文档解析、流式对话 + 来源引用、对话记忆与文档灰度更新。
+19 个 Phase 迭代,生产可用。
 
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)]()
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)]()
@@ -32,6 +33,13 @@
 - **每层都做严格的租户隔离。** 任何接收 `rag_id` / `document_id` /
   `conversation_id` 的 router,都会先调一次归属检查再做任何工作。
   跨租户 URL 永远返回 **404**(从不返回 403),绝不向非所有者确认资源存在。
+- **LLM Wiki 混合记忆(核心差异化)。** 源自 Andrej Karpathy 提出的
+  [LLM Wiki 理念](https://karpathy.bearblog.dev/llm-wiki/)(2025:
+  LLM 维护一个持续更新的 wiki,先读目录再答题,而不是每次都翻原始
+  语料)——ContextVault 把它落地为**查询驱动的 QA 笔记层**:可靠回答
+  异步沉淀为带 chunk 级溯源的笔记,下次同类问题先查 wiki(快 27%、
+  省检索成本),wiki 不足才回退原始 RAG;源文档更新即实时降级,
+  边界路由保证"笔记永远可追溯、冲突即拒答"。详见设计要点 5e-5h。
 - **pgvector + HNSW。** Embedding 跟业务数据存在同一个数据库。没有
   单独的向量库,没有同步任务,没有"向量库过期"这类失败模式。
 - **流式对话用 NDJSON,不是 SSE。** 每条回答都带 `chunk_id /
