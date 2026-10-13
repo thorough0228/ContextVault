@@ -110,35 +110,106 @@ def _parse_pdf_pymupdf(stream: io.BufferedIOBase) -> List[ParsedPage]:
         doc.close()
 
 
+# Agent 轻量解析 API 每片上限（mineru.net 免 token 档）: 20 页 / 10MB。
+# 字节上限留 5% 余量——分片重编码后体积可能不降反升（图重页面）。
+_MINERU_MAX_PAGES_PER_PART = 20
+_MINERU_MAX_BYTES_PER_PART = 10 * 1024 * 1024
+_MINERU_BYTES_SAFETY = 0.95
+
+
+def _split_pdf_pages(data: bytes, max_pages: int) -> List[bytes]:
+    """Split a PDF into parts that each satisfy the Agent API limits:
+    ≤max_pages pages AND ≤10 MB of bytes (5% safety margin).
+
+    Pages are packed greedily; when a part re-encodes over the byte
+    budget the part shrinks (binary search on page count) — image-heavy
+    pages can make fewer-page parts *larger*, so page count alone is
+    not enough. Single-page parts that still exceed the byte budget
+    are returned anyway: the API rejects them with -30001 and the
+    auto-chain degrades (nothing more we can do client-side).
+    PDFs already within both limits come back as the original bytes.
+    Corrupted/encrypted PDFs raise — the auto-chain degrades.
+    """
+
+    import fitz
+
+    byte_budget = int(_MINERU_MAX_BYTES_PER_PART * _MINERU_BYTES_SAFETY)
+    src = fitz.open(stream=data, filetype="pdf")
+    try:
+        if src.page_count <= max_pages and len(data) <= byte_budget:
+            return [data]
+
+        parts: List[bytes] = []
+        start = 0
+        while start < src.page_count:
+            # page-count ceiling for this part
+            hi = min(start + max_pages, src.page_count)
+            part = fitz.open()
+            part.insert_pdf(src, from_page=start, to_page=hi - 1)
+            blob = part.tobytes()
+            # shrink on the byte budget: binary search the largest
+            # page count whose re-encode fits
+            while len(blob) > byte_budget and hi - start > 1:
+                lo, cur = start, hi
+                while lo + 1 < cur:
+                    mid = (lo + cur) // 2
+                    probe = fitz.open()
+                    probe.insert_pdf(src, from_page=start, to_page=mid - 1)
+                    if len(probe.tobytes()) <= byte_budget:
+                        lo = mid
+                    else:
+                        cur = mid
+                    probe.close()
+                part.close()
+                hi = lo
+                part = fitz.open()
+                part.insert_pdf(src, from_page=start, to_page=hi - 1)
+                blob = part.tobytes()
+            part.close()
+            parts.append(blob)
+            start = hi
+        logger.info(
+            "parser.pdf.split pages=%d parts=%d", src.page_count, len(parts)
+        )
+        return parts
+    finally:
+        src.close()
+
+
 def _parse_pdf_mineru(
     stream: io.BufferedIOBase, *, timeout_s: float = 600.0
 ) -> List[ParsedPage]:
-    """Engine 1: the mineru.net official API (v4 精准解析).
+    """Engine 1: the mineru.net Agent lightweight API (no token).
 
-    The PDF bytes upload to mineru.net, parsing happens server-side,
-    and the result zip's markdown comes back for the shared cleaning +
-    pagination pipeline (no local model process at all). Failures raise
-    :class:`~app.ingest.mineru_api.MineruApiError`; the auto-chain
-    degrades to the next engine.
+    PDFs over the Agent limit (20 pages) are pre-split into ≤20-page
+    parts; each part is its own API task and the markdown parts are
+    joined before the shared cleaning + pagination pipeline (virtual
+    pages renumber continuously across parts). Any part failure fails
+    the whole engine — the auto-chain degrades to the next engine.
     """
 
     from app.config import get_settings
-    from app.ingest.mineru_api import MineruApiError, fetch_markdown_via_api
+    from app.ingest import mineru_api as mineru_api_mod
     from app.ingest.mineru_convert import clean_mineru_markdown
 
     settings = get_settings()
     data = stream.read()
     try:
-        clean = clean_mineru_markdown(
-            fetch_markdown_via_api(
-                data,
-                token=settings.mineru_api_token,
+        parts = _split_pdf_pages(data, _MINERU_MAX_PAGES_PER_PART)
+        md_parts = [
+            # module-attribute access (not a from-import binding) so
+            # tests can monkeypatch the wire function per-part
+            mineru_api_mod.fetch_markdown_via_api(
+                part,
                 base_url=settings.mineru_api_base_url,
                 timeout_s=timeout_s,
                 poll_interval=settings.mineru_api_poll_interval_seconds,
+                filename=f"part-{i}.pdf" if len(parts) > 1 else "input.pdf",
             )
-        )
-    except MineruApiError as exc:
+            for i, part in enumerate(parts)
+        ]
+        clean = clean_mineru_markdown("\n\n".join(md_parts))
+    except mineru_api_mod.MineruApiError as exc:
         raise RuntimeError(f"mineru api: {exc}") from exc
 
     return _markdown_to_pages(clean)

@@ -216,11 +216,11 @@ fixed+hybrid **0.939** / recursive 0.883 / semantic 0.796(overall hit@5),
 
 `PDF_PARSER=auto` 时 PDF 解析按优先级降级链执行:
 
-1. **MinerU**(mineru.net 官方 API,v4 精准解析:上传 → 轮询 → 结果 zip 取
-   full.md):布局/表格/OCR 质量最高且**不在本地跑模型**;产出的 markdown
-   经内置清洗(HTML 表格 → MD 管道表、剥图片引用、保留 LaTeX 公式),
-   按 H1/H2 标题切虚拟页。需 `MINERU_API_TOKEN`(mineru.net API 管理页
-   创建);token 未配置/调用失败自动降级到下一引擎
+1. **MinerU**(mineru.net Agent 轻量 API,**免 token**,IP 限频):上传 →
+   轮询 → CDN 取 full.md,不在本地跑模型;单文件限 ≤20 页/≤10MB,
+   **超 20 页自动按 20 页/片切分、逐片解析后 markdown 拼接**(虚拟页
+   连续编号);markdown 经内置清洗(HTML 表格 → MD 管道表、剥图片引用、
+   保留 LaTeX 公式)后按 H1/H2 标题切虚拟页;API 失败自动降级下一引擎
 2. **Unstructured**(`partition_pdf`,可选依赖)
 3. **PyMuPDF**(文本层,兜底/默认)
 

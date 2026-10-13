@@ -58,9 +58,6 @@ os.environ.setdefault("WIKI_CACHE_ENABLED", "0")
 # (a developer .env flip would otherwise poison SQLite locking and
 # prompt assertions everywhere).
 os.environ.setdefault("WIKI_ABSORB_ENABLED", "0")
-# Phase 19: the mineru engine calls the mineru.net API — pin the token
-# off so a developer .env can never make tests hit the real service.
-os.environ.setdefault("MINERU_API_TOKEN", "")
 
 import httpx
 import pytest
